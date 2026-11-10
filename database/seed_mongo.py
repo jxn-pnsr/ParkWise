@@ -1,24 +1,3 @@
-"""
-seed_mongo.py - fills MongoDB with sample data that matches seed.sql
-
-Order to run:
-    1. mysql ... < database/schema.sql
-    2. mysql ... parkwise < database/seed.sql
-    3. mongosh ... database/mongo_init.js
-    4. python database/seed_mongo.py
-
-It reads the rows in Integration_Outbox with status 'Sent' and writes them to
-MongoDB the same way the real outbox worker will. apply_event() can be reused
-in the backend. Writes are idempotent (upsert on source_event_id), so running
-an event twice does not create duplicates.
-
-The Pending and Failed rows are skipped on purpose, they are used to demo the
-Retry button on the admin outbox page.
-
-Environment variables (defaults are for a local dev machine):
-    MYSQL_HOST=127.0.0.1  MYSQL_PORT=3306  MYSQL_USER=root  MYSQL_PASSWORD=  MYSQL_DB=parkwise
-    MONGO_URI=mongodb://localhost:27017  MONGO_DB=parkwise
-"""
 import json
 import os
 from datetime import datetime, timedelta
@@ -42,7 +21,7 @@ def apply_event(db, event_id, event_type, payload, occurred_at):
     if isinstance(payload, (str, bytes)):
         payload = json.loads(payload)
 
-    # 1) every event creates one activity log
+    # every event creates one activity log
     log_doc = {
         "userId": payload.get("actor_user_id"),
         "role": payload.get("actor_role") or "System",
@@ -59,7 +38,7 @@ def apply_event(db, event_id, event_type, payload, occurred_at):
     db.Activity_Logs.update_one({"source_event_id": event_id},
                                 {"$setOnInsert": log_doc}, upsert=True)
 
-    # 2) create a notification if the event has one
+    # create a notification if the event has one
     notify = payload.get("notify")
     target = payload.get("target_user_id")
     if notify and target is not None:
@@ -81,7 +60,7 @@ def apply_event(db, event_id, event_type, payload, occurred_at):
         db.Notifications.update_one({"source_event_id": event_id},
                                     {"$setOnInsert": notif_doc}, upsert=True)
 
-    # 3) check-in / check-out events create or update the parking session
+    # check-in / check-out events create or update the parking session
     session = payload.get("session")
     if session and session.get("reservationId") is not None:
         # Only $set values the event actually has. Events can arrive out of order
