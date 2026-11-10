@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My reservations – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div class="segmented" role="tablist" aria-label="Which reservations" style="min-width:260px">
+        <button type="button" role="tab" aria-pressed="true" data-scope="active">Upcoming</button>
+        <button type="button" role="tab" aria-pressed="false" data-scope="past">Past</button>
+      </div>
+      <button type="button" class="btn btn-outline" id="refresh"></button>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead><tr><th>Vehicle</th><th>Bay</th><th>When</th><th>Type</th><th>Status</th><th class="num">Price</th><th class="actions"><span class="sr-only">Actions</span></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div id="more" class="mt-2" style="text-align:center"></div>
+  </section>
+</main>
+
+<script type="module">
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, $$, toast, toastError, setBusy, confirmDialog, emptyState, reservationBadge, skeletonRows, startCountdown } from "/js/ui.js";
+  import { fmtMoney, fmtRange, fmtDateTime, fmtPlate, BOOKING_TYPE } from "/js/format.js";
+
+  await mountShell({ role: "Customer", active: "reservations" });
+  pageHeader($("#head"), {
+    title: "My reservations",
+    subtitle: "Confirm held bays, see where you are parking, and cancel when your plans change.",
+    actions: html`<a class="btn btn-primary" href="/customer/lots.html">${icon("plus")} Book a bay</a>`,
+  });
+  render($("#refresh"), html`${icon("refresh-cw", "icon icon-sm")} Refresh`);
+
+  let scope = "active", page = 1, items = [], total = 0;
+  const timers = [];
+
+  function price(r) {
+    if (r.payment) return html`${fmtMoney(r.payment.total_amount, 2)}<span class="cell-sub">${r.payment.status === "Paid" ? "Paid" : "To pay"}</span>`;
+    if (["Cancelled", "Expired", "No-show"].includes(r.status)) return "–";
+    return html`${fmtMoney(r.estimated_fee, 2)}<span class="cell-sub">estimate</span>`;
+  }
+
+  function actions(r) {
+    const out = [];
+    if (r.can_confirm) out.push(html`<button class="btn btn-primary btn-sm" data-confirm="${r.reservation_id}">Confirm</button>`);
+    if (r.can_cancel) out.push(html`<button class="btn btn-secondary btn-sm" data-cancel="${r.reservation_id}">Cancel</button>`);
+    if (r.status === "In Use") out.push(html`<a class="btn btn-ghost btn-sm" href="/customer/parking.html">View</a>`);
+    if (r.payment && r.payment.status === "Pending") out.push(html`<a class="btn btn-primary btn-sm" href="/customer/payments.html">Pay</a>`);
+    return out;
+  }
+
+  function note(r) {
+    if (r.status === "Held") return html`<span class="cell-sub">Confirm in <b data-countdown="${r.reservation_id}">--:--</b></span>`;
+    if (r.can_cancel && r.cancel_deadline && r.status === "Confirmed") return html`<span class="cell-sub">Cancel by ${fmtDateTime(r.cancel_deadline)}</span>`;
+    if (r.status === "Cancelled" && r.cancel_reason) return html`<span class="cell-sub">${r.cancel_reason}</span>`;
+    return "";
+  }
+
+  function draw() {
+    timers.splice(0).forEach((stop) => stop());
+    if (!items.length) {
+      render($("#rows"), html`<tr><td colspan="7">${emptyState({
+        iconName: "calendar",
+        title: scope === "active" ? "No upcoming reservations" : "No past reservations yet",
+        text: scope === "active" ? "Book a bay and it will show up here." : "Finished, cancelled and expired bookings appear here.",
+        action: scope === "active" ? html`<a class="btn btn-primary btn-sm" href="/customer/lots.html">${icon("plus")} Book a bay</a>` : "",
+      })}</td></tr>`);
+      render($("#more"), "");
+      return;
+    }
+    render($("#rows"), items.map((r) => html`<tr>
+      <td><div class="cell-main"><span class="cell-ic">${icon("car")}</span><div><b>${r.vehicle.plate_number}</b><small>${r.vehicle.province}</small></div></div></td>
+      <td><b>${r.slot.slot_code}</b><span class="cell-sub">${r.slot.lot_name}</span></td>
+      <td>${fmtRange(r.start_time, r.end_time)}${note(r)}</td>
+      <td>${BOOKING_TYPE[r.booking_type] || r.booking_type}</td>
+      <td>${reservationBadge(r.status, r.display_label)}</td>
+      <td class="num">${price(r)}</td>
+      <td class="actions"><div class="flex" style="justify-content:flex-end">${actions(r)}</div></td>
+    </tr>`));
+    render($("#more"), items.length < total ? html`<button class="btn btn-secondary btn-sm" id="load-more">Show more</button>` : "");
+    $("#load-more")?.addEventListener("click", () => { page += 1; load(true); });
+
+    for (const r of items.filter((x) => x.status === "Held")) {
+      const el = $(`[data-countdown="${r.reservation_id}"]`);
+      if (el) timers.push(startCountdown(el, r.hold_expires_at, r.server_time, () => load()));
+    }
+    $$("[data-confirm]").forEach((b) => b.onclick = () => confirmOne(b));
+    $$("[data-cancel]").forEach((b) => b.onclick = () => cancelOne(b));
+  }
+
+  async function load(append = false) {
+    if (!append) { page = 1; render($("#rows"), skeletonRows(3, 7)); }
+    try {
+      const res = await api.get("/me/reservations", { scope, page, per_page: 20 });
+      items = append ? items.concat(res.items) : res.items;
+      total = res.total;
+      draw();
+    } catch (err) { toastError(err); }
+  }
+
+  async function confirmOne(btn) {
+    setBusy(btn, true);
+    try {
+      const r = await api.post(`/reservations/${btn.dataset.confirm}/confirm`);
+      toast(`Bay ${r.slot.slot_code} confirmed.`);
+    } catch (err) {
+      toast(err.code === "HOLD_EXPIRED" ? "The hold ended before you confirmed. Please book again." : err.message, "error", 6000);
+    }
+    load();
+  }
+
+  async function cancelOne(btn) {
+    const r = items.find((x) => String(x.reservation_id) === btn.dataset.cancel);
+    const ok = await confirmDialog({
+      title: `Cancel bay ${r.slot.slot_code}?`,
+      message: `${fmtRange(r.start_time, r.end_time)} · ${fmtPlate(r.vehicle)}. There is no cancellation fee.`,
+      confirmText: "Cancel reservation", cancelText: "Keep it", danger: true,
+    });
+    if (!ok) return;
+    setBusy(btn, true);
+    try {
+      await api.post(`/reservations/${r.reservation_id}/cancel`, { reason: "Cancelled by customer" });
+      toast("Reservation cancelled.");
+    } catch (err) {
+      toast(err.message, "error", 7000);   // e.g. too late to cancel: contact an administrator
+    }
+    load();
+  }
+
+  $$("[data-scope]").forEach((b) => b.onclick = () => {
+    scope = b.dataset.scope;
+    $$("[data-scope]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    load();
+  });
+  $("#refresh").onclick = () => load();
+  load();
+</script>
+</body>
+</html>

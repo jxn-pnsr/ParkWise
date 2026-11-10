@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="dash-stats" id="stats" aria-label="Summary"></section>
+
+  <div class="dash-grid">
+    <section class="panel" aria-labelledby="bay-title">
+      <div class="panel-head">
+        <h2 id="bay-title">Choose a bay</h2>
+        <button type="button" class="btn btn-outline" id="filter-btn"></button>
+      </div>
+      <div id="bay-map"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="res-title">
+      <div class="panel-head"><h2 id="res-title">Reservation details</h2><span class="step">Step 1 of 2</span></div>
+      <form class="res-form" id="res-form">
+        <div class="segmented" role="group" aria-label="Booking type">
+          <button type="button" aria-pressed="true" data-type="now">Book now</button>
+          <button type="button" aria-pressed="false" data-type="ahead">Book ahead</button>
+        </div>
+        <div class="field">
+          <label class="label" for="lot">Parking lot</label>
+          <select class="select" id="lot" name="lot"></select>
+        </div>
+        <div class="field">
+          <label class="label" for="date">Arrival date</label>
+          <div class="date-field">
+            <input class="input" id="date" name="date" type="date">
+          </div>
+        </div>
+        <div class="field">
+          <label class="label" for="time">Arrival time</label>
+          <select class="select" id="time" name="time"></select>
+        </div>
+        <div class="field">
+          <label class="label" for="hours">Length of stay</label>
+          <select class="select" id="hours" name="hours">
+            <option value="1">1 hour</option><option value="2" selected>2 hours</option><option value="3">3 hours</option><option value="4">4 hours</option><option value="6">6 hours</option><option value="12">12 hours</option>
+          </select>
+        </div>
+        <button class="btn btn-primary btn-rect btn-block btn-arrow" type="submit">Find available bays</button>
+      </form>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, $$, toast, toastError } from "/js/ui.js";
+  import { bkkDateString, fmtMoney } from "/js/format.js";
+  import { renderBayMap, mapSkeleton } from "/js/baymap.js";
+
+  const user = await mountShell({ role: "Customer", active: "dashboard" });
+  const firstName = (user.full_name || "").trim().split(/\s+/)[0] || "there";
+
+  pageHeader($("#head"), {
+    title: `Hello, ${firstName}!`,
+    subtitle: "Where are you parking today? We have open bays waiting.",
+  });
+
+  const hoursSel = $("#hours");
+  const lotSel = $("#lot");
+  mapSkeleton($("#bay-map"));
+
+  // numbers (GET /api/me/dashboard)
+  let data;
+  try {
+    data = await api.get("/me/dashboard");
+  } catch (err) {
+    toastError(err);
+    data = { open_bays: "–", total_bays: "–", upcoming: user.counts?.active_reservations ?? 0,
+             spent_month: 0, spent_change_pct: null, lots: [] };
+  }
+
+  const pct = data.spent_change_pct;
+  const changeText = pct === null || pct === undefined ? (data.spent_month ? "First spending this month" : "No parking costs yet")
+    : pct === 0 ? "Same as last month"
+    : `${Math.abs(pct)}% ${pct < 0 ? "less" : "more"} than last month`;
+
+  render($("#stats"), html`
+    <article class="dash-stat">
+      <div class="dash-stat-label">${icon("calendar")}<span>Open bays right now</span></div>
+      <div class="dash-stat-value green">${data.open_bays}<small>of ${data.total_bays}</small></div>
+      <div class="dash-stat-sub">Ready to book</div>
+      <img class="dash-stat-art" src="/img/stat-car.svg" alt="">
+    </article>
+    <article class="dash-stat">
+      <div class="dash-stat-label">${icon("clock")}<span>Upcoming reservations</span></div>
+      <div class="dash-stat-value">${data.upcoming}</div>
+      <div class="dash-stat-sub"><a href="/customer/reservations.html">View reservations →</a></div>
+      <img class="dash-stat-art" src="/img/stat-calendar.svg" alt="">
+    </article>
+    <article class="dash-stat">
+      <div class="dash-stat-label">${icon("star")}<span>Spent this month</span></div>
+      <div class="dash-stat-value">${fmtMoney(data.spent_month)}</div>
+      <div class="dash-stat-sub">${data.unpaid_payments ? html`<a href="/customer/payments.html">${data.unpaid_payments} payment(s) to pay →</a>` : changeText}</div>
+      <img class="dash-stat-art" src="/img/stat-chart.svg" alt="">
+    </article>`);
+
+  // ---- lot picker + live bay map --------------------------------------------------
+  lotSel.innerHTML = "";
+  for (const lot of data.lots || []) {
+    lotSel.append(new Option(`${lot.lot_name} · ${lot.available_slots} of ${lot.total_slots} open`, lot.lot_id));
+  }
+
+  async function drawMap() {
+    if (!lotSel.value) {
+      render($("#bay-map"), html`<p class="muted">No parking lots are open right now.</p>`);
+      return;
+    }
+    mapSkeleton($("#bay-map"));
+    try {
+      const lot = await api.get(`/lots/${lotSel.value}/slots`, { duration_hours: hoursSel.value });
+      renderBayMap($("#bay-map"), {
+        slots: lot.slots, lotName: lot.lot.lot_name,
+        // picking a bay here jumps straight to booking it now
+        onPick: (s) => { location.href = `/customer/lots.html?` + new URLSearchParams({ lot: lotSel.value, slot: s.slot_id, type: "now", hours: hoursSel.value }); },
+      });
+    } catch (err) { toastError(err); }
+  }
+  lotSel.onchange = drawMap;
+  hoursSel.onchange = drawMap;
+  drawMap();
+
+  render($("#filter-btn"), html`${icon("refresh-cw", "icon icon-sm")} Refresh`);
+  $("#filter-btn").onclick = drawMap;
+
+  // ---- reservation form -------------------------------------------------------
+  const timeSel = $("#time");
+  for (let m = 0; m < 24 * 60; m += 30) {
+    const v = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    timeSel.append(new Option(v, v)); // the design shows 24-hour values, e.g. "10:00"
+  }
+  timeSel.value = "10:00";
+  const dateEl = $("#date");
+  dateEl.min = bkkDateString();
+  dateEl.max = bkkDateString(new Date(), 7); // booking window: 7 days ahead
+
+  let type = "now";
+  const syncType = () => {
+    // "Book now" starts immediately, so date and time only matter when booking ahead
+    dateEl.disabled = timeSel.disabled = type === "now";
+  };
+  $$("[data-type]").forEach((b) => b.onclick = () => {
+    type = b.dataset.type;
+    $$("[data-type]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    syncType();
+  });
+  syncType();
+
+  $("#res-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const q = new URLSearchParams({ lot: lotSel.value, hours: hoursSel.value, type });
+    if (type === "ahead") {
+      if (!dateEl.value) { toast("Choose an arrival date to book ahead.", "error"); dateEl.focus(); return; }
+      q.set("date", dateEl.value); q.set("time", timeSel.value);
+    }
+    location.href = "/customer/lots.html?" + q;
+  });
+</script>
+</body>
+</html>

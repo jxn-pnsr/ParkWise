@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Find a lot – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <div id="hold-bar"></div>
+
+  <div class="dash-grid">
+    <section class="panel" aria-labelledby="map-title">
+      <div class="panel-head">
+        <h2 id="map-title">Choose a bay</h2>
+        <button type="button" class="btn btn-outline" id="refresh"></button>
+      </div>
+      <p class="muted small" id="window-text" style="margin:-4px 0 12px"></p>
+      <div id="bay-map"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="side-title">
+      <div class="panel-head"><h2 id="side-title">Reservation details</h2><span class="step" id="step">Step 1 of 2</span></div>
+      <div id="side"></div>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+  // Booking flow
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, $$, toast, toastError, setBusy, startCountdown, confirmDialog, emptyState, getParam } from "/js/ui.js";
+  import { bkkDateString, fmtMoney, fmtRange, fmtDateTime, fmtPlate, toApiDateTime } from "/js/format.js";
+  import { renderBayMap, mapSkeleton } from "/js/baymap.js";
+
+  await mountShell({ role: "Customer", active: "lots" });
+  pageHeader($("#head"), { title: "Find a parking bay", subtitle: "Pick a time, choose a green bay, then hold it for 5 minutes while you confirm." });
+  render($("#refresh"), html`${icon("refresh-cw", "icon icon-sm")} Refresh`);
+
+  const [rules, vehicles, lotsRes] = await Promise.all([
+    api.get("/config/public"),
+    api.get("/me/vehicles"),
+    api.get("/lots"),
+  ]).catch((err) => { toastError(err); return [{}, [], { items: [] }]; });
+
+  // state 
+  const halfHours = [];
+  for (let m = 0; m < 24 * 60; m += 30) halfHours.push(`${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`);
+
+  const qType = getParam("type");
+  const state = {
+    type: qType === "ahead" || (!qType && getParam("date") && getParam("time")) ? "ahead" : "now",
+    lotId: Number(getParam("lot")) || lotsRes.items[0]?.lot_id,
+    date: getParam("date") || bkkDateString(),
+    time: halfHours.includes(getParam("time")) ? getParam("time") : nextHalfHour(),
+    hours: Math.min(Math.max(Number(getParam("hours")) || 2, rules.MIN_DURATION_HOURS || 1), rules.MAX_DURATION_HOURS || 12),
+    slotId: Number(getParam("slot")) || null,
+    vehicleId: (vehicles.find((v) => v.is_default) || vehicles[0])?.vehicle_id,
+    lot: null, // response of /lots/<id>/slots
+    hold: null, // reservation while Held / after Confirmed
+  };
+  if (state.type === "ahead" && state.date === bkkDateString() && state.time <= nowHHMM()) state.time = nextHalfHour();
+
+  function nowHHMM() {
+    return new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", minute: "2-digit", hour12: false }).format(new Date());
+  }
+  function nextHalfHour() {
+    const [h, m] = nowHHMM().split(":").map(Number);
+    const mins = Math.ceil((h * 60 + m + 1) / 30) * 30;
+    return halfHours[(mins / 30) % 48];
+  }
+  const startParam = () => (state.type === "ahead" ? toApiDateTime(state.date, state.time) : undefined);
+
+  // map
+  async function loadMap() {
+    if (!state.lotId) {
+      render($("#bay-map"), emptyState({ iconName: "map-pin", title: "No parking lots are open", text: "Please try again later." }));
+      return;
+    }
+    mapSkeleton($("#bay-map"));
+    try {
+      state.lot = await api.get(`/lots/${state.lotId}/slots`, { start: startParam(), duration_hours: state.hours });
+    } catch (err) {
+      toastError(err);
+      return;
+    }
+    const pick = state.lot.slots.find((s) => s.slot_id === state.slotId);
+    if (state.slotId && (!pick || pick.display_status !== "Available")) {
+      if (!state.hold) toast(`That bay is not free for this time. Please choose another.`, "info");
+      if (!state.hold) state.slotId = null;
+    }
+    const w = state.lot.window;
+    const free = state.lot.counts.Available;
+    $("#window-text").textContent = `${state.lot.lot.lot_name} · ${fmtRange(w.start, w.end)} · ${free} bay${free === 1 ? "" : "s"} free`;
+    renderBayMap($("#bay-map"), {
+      slots: state.lot.slots, lotName: state.lot.lot.lot_name, selectedId: state.slotId,
+      onPick: state.hold ? null : (s) => { state.slotId = state.slotId === s.slot_id ? null : s.slot_id; loadMapLocal(); drawSide(); },
+    });
+  }
+  // redraw selection without a new request
+  function loadMapLocal() {
+    renderBayMap($("#bay-map"), {
+      slots: state.lot.slots, lotName: state.lot.lot.lot_name, selectedId: state.slotId,
+      onPick: (s) => { state.slotId = state.slotId === s.slot_id ? null : s.slot_id; loadMapLocal(); drawSide(); },
+    });
+  }
+  $("#refresh").onclick = () => loadMap();
+
+  // side panel
+  function drawChoose() {
+    $("#step").textContent = "Step 1 of 2";
+    if (!vehicles.length) {
+      render($("#side"), emptyState({ iconName: "car", title: "Add your car first",
+        text: "You need at least one vehicle to make a booking.",
+        action: html`<a class="btn btn-primary btn-sm" href="/customer/vehicles.html?add=1&back=lots">${icon("plus")} Add a vehicle</a>` }));
+      return;
+    }
+    const slot = state.lot?.slots.find((s) => s.slot_id === state.slotId);
+    const price = state.hours * (rules.RATE_PER_HOUR || 20);
+    render($("#side"), html`
+      <form class="res-form" id="choose" novalidate>
+        <div class="segmented" role="group" aria-label="Booking type">
+          <button type="button" aria-pressed="${state.type === "now"}" data-type="now">Book now</button>
+          <button type="button" aria-pressed="${state.type === "ahead"}" data-type="ahead">Book ahead</button>
+        </div>
+        <div class="field">
+          <label class="label" for="lot">Parking lot</label>
+          <select class="select" id="lot">${lotsRes.items.map((l) => html`<option value="${l.lot_id}" ${l.lot_id === state.lotId ? "selected" : ""}>${l.lot_name}</option>`)}</select>
+        </div>
+        ${state.type === "ahead" ? html`
+        <div class="row">
+          <div class="field"><label class="label" for="date">Arrival date</label>
+            <input class="input" id="date" type="date" value="${state.date}" min="${bkkDateString()}" max="${bkkDateString(new Date(), rules.MAX_ADVANCE_DAYS || 7)}"></div>
+          <div class="field"><label class="label" for="time">Arrival time</label>
+            <select class="select" id="time">${halfHours.map((t) => html`<option ${t === state.time ? "selected" : ""}>${t}</option>`)}</select></div>
+        </div>` : ""}
+        <div class="field">
+          <label class="label" for="hours">Length of stay</label>
+          <select class="select" id="hours">${Array.from({ length: (rules.MAX_DURATION_HOURS || 12) }, (_, i) => i + 1).map((h) =>
+            html`<option value="${h}" ${h === state.hours ? "selected" : ""}>${h} hour${h > 1 ? "s" : ""}</option>`)}</select>
+        </div>
+        <div class="field">
+          <label class="label" for="vehicle">Vehicle</label>
+          <select class="select" id="vehicle">${vehicles.map((v) => html`<option value="${v.vehicle_id}" ${v.vehicle_id === state.vehicleId ? "selected" : ""}>${fmtPlate(v)}${v.is_default ? " (main)" : ""}</option>`)}</select>
+        </div>
+        <div class="kv">
+          <div><span class="k">Bay</span><span class="v">${slot ? html`<span class="badge tone-ok">${slot.slot_code}${slot.slot_type === "EV" ? " · EV" : ""}</span>` : html`<span class="muted">Pick a green bay on the map</span>`}</span></div>
+          <div><span class="k">${fmtMoney(rules.RATE_PER_HOUR || 20)} × ${state.hours} hour${state.hours > 1 ? "s" : ""}</span><span class="v">${fmtMoney(price, 2)}</span></div>
+        </div>
+        <button class="btn btn-primary btn-rect btn-block btn-arrow" type="submit" ${slot ? "" : "disabled"}>Hold this bay</button>
+        <p class="hint">We hold the bay for ${rules.HOLD_MINUTES || 5} minutes while you confirm. You pay after you leave.</p>
+      </form>`);
+
+    $$("[data-type]").forEach((b) => b.onclick = () => { state.type = b.dataset.type; state.slotId = null; drawSide(); loadMap(); });
+    $("#lot").onchange = (e) => { state.lotId = Number(e.target.value); state.slotId = null; drawSide(); loadMap(); };
+    $("#hours").onchange = (e) => { state.hours = Number(e.target.value); drawSide(); loadMap(); };
+    $("#vehicle").onchange = (e) => { state.vehicleId = Number(e.target.value); };
+    if ($("#date")) $("#date").onchange = (e) => { state.date = e.target.value; loadMap(); };
+    if ($("#time")) $("#time").onchange = (e) => { state.time = e.target.value; loadMap(); };
+    $("#choose").onsubmit = (e) => { e.preventDefault(); hold(e.submitter || $("#choose [type=submit]")); };
+  }
+
+  async function hold(btn) {
+    const body = { booking_type: state.type === "ahead" ? "Advance" : "Instant", slot_id: state.slotId,
+                   vehicle_id: state.vehicleId, duration_hours: state.hours };
+    if (state.type === "ahead") body.start_time = startParam();
+    setBusy(btn, true);
+    try {
+      state.hold = await api.post("/reservations", body);
+      drawSide();
+      loadMap();
+    } catch (err) {
+      if (err.code === "SLOT_TAKEN") {
+        const alt = (err.extra.alternatives || []).map((a) => a.slot_code).join(", ");
+        toast(`${err.message}${alt ? " Free now: " + alt + "." : ""}`, "error", 6000);
+        state.slotId = null;
+        loadMap();
+        drawSide();
+      } else if (err.fields) {
+        toast(Object.values(err.fields)[0], "error", 6000);
+      } else {
+        toastError(err);
+      }
+    } finally {
+      setBusy(btn, false);
+    }
+  }
+
+  // side panel: held and done
+  let stopTimer = null;
+
+  function drawHeld() {
+    const r = state.hold;
+    $("#step").textContent = "Step 2 of 2";
+    render($("#hold-bar"), html`<div class="countdown-bar" id="cd">${icon("clock")}
+      <span>Bay ${r.slot.slot_code} is held for you. Confirm within</span><span class="time" id="cd-time">--:--</span></div>`);
+    render($("#side"), html`
+      <div class="kv">
+        <div><span class="k">Bay</span><span class="v">${r.slot.slot_code} · ${r.slot.lot_name}</span></div>
+        <div><span class="k">${r.booking_type === "Instant" ? "Booked now" : "Arrive"}</span><span class="v">${fmtRange(r.start_time, r.end_time)}</span></div>
+        <div><span class="k">Vehicle</span><span class="v">${fmtPlate(r.vehicle)}</span></div>
+        <div><span class="k">Estimated price</span><span class="v">${fmtMoney(r.estimated_fee, 2)}</span></div>
+      </div>
+      <div class="alert alert-info mt-2">${icon("info")}<span>${r.booking_type === "Instant"
+        ? `Check in within ${rules.NOSHOW_GRACE_MINUTES || 30} minutes. You can cancel within ${rules.INSTANT_CANCEL_MINUTES || 10} minutes of confirming.`
+        : `Check in from ${rules.EARLY_CHECKIN_MINUTES || 15} min before to ${rules.NOSHOW_GRACE_MINUTES || 30} min after the start. Cancel up to ${rules.ADVANCE_CANCEL_HOURS || 1} hour before.`}</span></div>
+      <div class="stack mt-2">
+        <button class="btn btn-primary btn-rect btn-block" id="confirm">Confirm reservation</button>
+        <button class="btn btn-secondary btn-block" id="release">Release this bay</button>
+      </div>`);
+    stopTimer?.();
+    stopTimer = startCountdown($("#cd-time"), r.hold_expires_at, r.server_time, () => {
+      $("#cd")?.classList.add("expired");
+      const t = $("#cd-time"); if (t) t.textContent = "00:00";
+    });
+    $("#confirm").onclick = (e) => confirmHold(e.currentTarget);
+    $("#release").onclick = async (e) => {
+      if (!(await confirmDialog({ title: `Release bay ${r.slot.slot_code}?`, message: "Someone else will be able to book it.", confirmText: "Release" }))) return;
+      setBusy(e.currentTarget, true);
+      try { await api.post(`/reservations/${r.reservation_id}/cancel`, { reason: "Released before confirming" }); }
+      catch (err) { toastError(err); }
+      reset();
+    };
+  }
+
+  async function confirmHold(btn) {
+    setBusy(btn, true);
+    try {
+      state.hold = await api.post(`/reservations/${state.hold.reservation_id}/confirm`);
+      drawSide();
+      loadMap();
+    } catch (err) {
+      if (err.code === "HOLD_EXPIRED") {
+        toast("The 5-minute hold ended before you confirmed. Please choose a bay again.", "error", 6000);
+        reset();
+      } else {
+        toastError(err);
+        setBusy(btn, false);
+      }
+    }
+  }
+
+  function drawDone() {
+    const r = state.hold;
+    stopTimer?.();
+    $("#step").textContent = "Done";
+    render($("#hold-bar"), html`<div class="alert alert-ok" style="margin-bottom:16px">${icon("circle-check")}
+      <span>Reservation confirmed: bay ${r.slot.slot_code} at ${r.slot.lot_name}, ${fmtRange(r.start_time, r.end_time)}.</span></div>`);
+    render($("#side"), html`
+      <div class="kv">
+        <div><span class="k">Reservation</span><span class="v">#${r.reservation_id}</span></div>
+        <div><span class="k">Bay</span><span class="v">${r.slot.slot_code} · ${r.slot.lot_name}</span></div>
+        <div><span class="k">When</span><span class="v">${fmtRange(r.start_time, r.end_time)}</span></div>
+        <div><span class="k">Vehicle</span><span class="v">${fmtPlate(r.vehicle)}</span></div>
+        <div><span class="k">Confirmed</span><span class="v">${fmtDateTime(r.confirmed_at)}</span></div>
+      </div>
+      <p class="hint mt-2">Show your licence plate to the staff at the entrance. They will check you in.</p>
+      <div class="stack mt-2">
+        <a class="btn btn-primary btn-rect btn-block" href="/customer/reservations.html">See my reservations</a>
+        <button class="btn btn-secondary btn-block" id="again">Book another bay</button>
+      </div>`);
+    $("#again").onclick = reset;
+  }
+
+  function drawSide() {
+    if (!state.hold) return drawChoose();
+    return state.hold.status === "Held" ? drawHeld() : drawDone();
+  }
+
+  function reset() {
+    stopTimer?.();
+    state.hold = null;
+    state.slotId = null;
+    render($("#hold-bar"), "");
+    drawSide();
+    loadMap();
+  }
+
+  drawSide();
+  await loadMap();
+  drawSide();
+</script>
+</body>
+</html>
