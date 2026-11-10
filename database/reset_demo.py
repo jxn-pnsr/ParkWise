@@ -66,7 +66,7 @@ def reset_mongo(db_name):
     sys.path.insert(0, HERE)
     import seed_mongo
 
-    client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017"), serverSelectionTimeoutMS=3000)
+    client = MongoClient(os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017"), serverSelectionTimeoutMS=3000)
     try:
         client.admin.command("ping")
     except PyMongoError:

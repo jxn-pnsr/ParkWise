@@ -183,7 +183,7 @@ def seed(db, conn):
 
 
 if __name__ == "__main__":
-    client = MongoClient(os.getenv("MONGO_URI", "mongodb://localhost:27017"),
+    client = MongoClient(os.getenv("MONGO_URI", "mongodb://127.0.0.1:27017"),
                          serverSelectionTimeoutMS=5000)
     mongo_db = client[os.getenv("MONGO_DB", "parkwise")]
     counts, n_events = seed(mongo_db, mysql_conn())
