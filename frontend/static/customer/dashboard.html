@@ -108,7 +108,7 @@
       <img class="dash-stat-art" src="/img/stat-chart.svg" alt="">
     </article>`);
 
-  // ---- lot picker + live bay map --------------------------------------------------
+  // lot picker + live bay map
   lotSel.innerHTML = "";
   for (const lot of data.lots || []) {
     lotSel.append(new Option(`${lot.lot_name} · ${lot.available_slots} of ${lot.total_slots} open`, lot.lot_id));
@@ -136,7 +136,7 @@
   render($("#filter-btn"), html`${icon("refresh-cw", "icon icon-sm")} Refresh`);
   $("#filter-btn").onclick = drawMap;
 
-  // ---- reservation form -------------------------------------------------------
+  // reservation form
   const timeSel = $("#time");
   for (let m = 0; m < 24 * 60; m += 30) {
     const v = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
