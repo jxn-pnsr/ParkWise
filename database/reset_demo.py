@@ -1,17 +1,3 @@
-"""
-reset_demo.py - rebuild the database from scratch (schema + seed), then MongoDB.
-
-Works on Windows, macOS and Linux (no mysql command line needed).
-
-    python database/reset_demo.py                 # reset the demo database (MYSQL_DB, default parkwise)
-    python database/reset_demo.py --db parkwise_test --skip-mongo   # database used by backend tests
-
-Run it right before a demo or presentation: seed times are relative to "now",
-so the held reservation (countdown) is only fresh for 5 minutes after a reset.
-
-Reads the same environment variables as seed_mongo.py (and backend/.env if present):
-    MYSQL_HOST MYSQL_PORT MYSQL_USER MYSQL_PASSWORD MYSQL_DB MONGO_URI MONGO_DB
-"""
 import argparse
 import os
 import re
