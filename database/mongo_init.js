@@ -1,16 +1,3 @@
-// ParkWise - MongoDB setup (collections, validators and indexes)
-//
-// Run with (safe to run again, it does not delete data):
-//   mongosh "mongodb://localhost:27017/parkwise" database/mongo_init.js
-//
-// Notes:
-//  * userId, reservationId, vehicleId are the integer ids from MySQL.
-//  * All times are stored as BSON Date (UTC).
-//  * source_event_id is the event_id from Integration_Outbox. It has a unique
-//    index so the same event can be sent twice without creating duplicates.
-//    The index is partial, so documents created by hand (no event) are fine.
-//  * metadata and admin_note are free-form on purpose (flexible schema).
-
 const dbp = db.getSiblingDB("parkwise");
 const idType = ["int", "long"];
 
@@ -25,9 +12,7 @@ function ensureCollection(name, validator) {
   }
 }
 
-// ---------------------------------------------------------------
 // Parking_Sessions: one session per reservation
-// ---------------------------------------------------------------
 ensureCollection("Parking_Sessions", { $jsonSchema: {
   bsonType: "object",
   required: ["userId", "plateNumber", "checkInAt", "createdAt"],
@@ -62,9 +47,7 @@ dbp.Parking_Sessions.createIndex({ userId: 1, checkInAt: -1 },       { name: "ix
 dbp.Parking_Sessions.createIndex({ plateNumber: 1, checkInAt: -1 },  { name: "ix_session_plate" });
 dbp.Parking_Sessions.createIndex({ checkOutAt: 1 },                  { name: "ix_session_open" });
 
-// ---------------------------------------------------------------
 // Activity_Logs
-// ---------------------------------------------------------------
 ensureCollection("Activity_Logs", { $jsonSchema: {
   bsonType: "object",
   required: ["action_type", "timestamp"],
@@ -91,9 +74,7 @@ dbp.Activity_Logs.createIndex({ action_type: 1, timestamp: -1 }, { name: "ix_log
 dbp.Activity_Logs.createIndex({ entity_type: 1, entity_id: 1 },  { name: "ix_log_entity" });
 dbp.Activity_Logs.createIndex({ is_archived: 1, timestamp: -1 }, { name: "ix_log_archived" });
 
-// ---------------------------------------------------------------
 // Notifications
-// ---------------------------------------------------------------
 ensureCollection("Notifications", { $jsonSchema: {
   bsonType: "object",
   required: ["userId", "type", "title", "message", "isRead", "sentAt"],
@@ -115,9 +96,7 @@ dbp.Notifications.createIndex({ source_event_id: 1 },
     partialFilterExpression: { source_event_id: { $type: "string" } } });
 dbp.Notifications.createIndex({ reservationId: 1 }, { name: "ix_notif_reservation", sparse: true });
 
-// ---------------------------------------------------------------
 // User_Preferences: one document per user
-// ---------------------------------------------------------------
 ensureCollection("User_Preferences", { $jsonSchema: {
   bsonType: "object",
   required: ["userId", "theme", "updatedAt"],
