@@ -99,6 +99,7 @@ CREATE TABLE Parking_Slots (
   slot_id     INT UNSIGNED NOT NULL AUTO_INCREMENT,
   lot_id      INT UNSIGNED NOT NULL,
   slot_code   VARCHAR(20)  NOT NULL,
+  slot_type   ENUM('Standard','EV') NOT NULL DEFAULT 'Standard',  -- EV = has a charger (phase 1)
   slot_status ENUM('Active','Maintenance') NOT NULL DEFAULT 'Active',
   is_deleted  TINYINT(1)   NOT NULL DEFAULT 0,
   created_at  DATETIME     NOT NULL DEFAULT (UTC_TIMESTAMP()),
