@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ParkWise – Parking, made simple</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<!-- clip shapes for the curved photo (fractions of the photo box) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <clipPath id="lp-clip" clipPathUnits="objectBoundingBox"><path d="M0.118,0 C0.04,0.08 0,0.22 0,0.4 C0,0.62 0.2,0.85 0.427,1 H1 V0 Z"/></clipPath>
+    <clipPath id="lp-clip-back" clipPathUnits="objectBoundingBox"><path d="M0.14,0 C0.04,0.08 0,0.25 0,0.45 C0,0.7 0.12,0.9 0.26,1 H1 V0 Z"/></clipPath>
+  </defs>
+</svg>
+
+<div class="lp">
+<header class="lp-nav"><div class="lp-nav-in">
+  <a class="brand" href="/"><img src="/img/logo-car.svg" alt=""><span class="brand-text">Park<b>Wise</b></span></a>
+  <nav class="lp-links" aria-label="Main">
+    <a href="/" aria-current="page">Home</a><a href="/customer/reservations.html">My Bookings</a><a href="#how">About</a>
+  </nav>
+  <a class="btn" id="auth-btn" href="/login.html" style="display:none"></a>
+  <a class="btn push" id="login-btn" href="/login.html">Login</a>
+</div></header>
+
+<main>
+  <section class="lp-hero">
+    <div class="lp-hero-copy">
+      <span class="lp-pill"><svg class="icon"><use href="/vendor/icons/sprite.svg#leaf"/></svg>Smart Parking • Smarter Life</span>
+      <div class="lp-title-wrap">
+        <h1><span class="lp-l1">Parking,<svg class="lp-spark" viewBox="0 0 66 66" fill="none" aria-hidden="true"><path d="M8 40 14 8M26 44 50 18M38 58 62 52" stroke="#A9C5A0" stroke-width="7" stroke-linecap="round"/></svg></span><br>made simple.</h1>
+      </div>
+      <p class="lp-lead">Find and reserve your parking spot in just a few clicks.</p>
+
+      <form class="lp-search" id="search" action="/customer/lots.html" method="get">
+        <label class="lp-field">
+          <svg class="icon"><use href="/vendor/icons/sprite.svg#calendar"/></svg>
+          <span class="lp-field-body"><small>Date</small><span class="val"><span id="d-label">–</span><svg class="icon"><use href="/vendor/icons/sprite.svg#chevron-down"/></svg></span></span>
+          <input type="date" name="date" id="s-date" required aria-label="Date">
+        </label>
+        <label class="lp-field">
+          <svg class="icon"><use href="/vendor/icons/sprite.svg#clock"/></svg>
+          <span class="lp-field-body"><small>Time</small><span class="val"><span id="t-label">–</span><svg class="icon"><use href="/vendor/icons/sprite.svg#chevron-down"/></svg></span></span>
+          <select name="time" id="s-time" aria-label="Time"></select>
+        </label>
+        <label class="lp-field">
+          <svg class="icon"><use href="/vendor/icons/sprite.svg#hourglass"/></svg>
+          <span class="lp-field-body"><small>Duration</small><span class="val"><span id="h-label">2 hours</span><svg class="icon"><use href="/vendor/icons/sprite.svg#chevron-down"/></svg></span></span>
+          <select name="hours" id="s-hours" aria-label="Duration">
+            <option value="1">1 hour</option><option value="2" selected>2 hours</option><option value="3">3 hours</option><option value="4">4 hours</option><option value="6">6 hours</option><option value="12">12 hours</option>
+          </select>
+        </label>
+        <button class="btn btn-arrow" type="submit">Find Parking</button>
+      </form>
+    </div>
+
+    <div class="lp-visual" aria-hidden="true">
+      <div class="lp-visual-back"></div>
+      <div class="lp-photo"><img src="/img/parking-garage.jpg" alt="" onerror="this.remove()"></div>
+    </div>
+  </section>
+
+  <section class="lp-how" id="how">
+    <div class="lp-how-label">How it works</div>
+    <div class="lp-how-head">
+      <h2>Book in 3 easy steps</h2>
+      <a class="lp-more" href="#how">Learn more <svg class="icon"><use href="/vendor/icons/sprite.svg#arrow-right"/></svg></a>
+    </div>
+    <div class="lp-steps">
+      <div class="lp-step"><span class="lp-step-no">1</span><div class="lp-step-body"><h3>Search</h3><p>Choose your preferred date, time and location.</p></div><img src="/img/step-search.svg" alt=""></div>
+      <svg class="icon lp-arrow"><use href="/vendor/icons/sprite.svg#arrow-right"/></svg>
+      <div class="lp-step"><span class="lp-step-no">2</span><div class="lp-step-body"><h3>Book</h3><p>Confirm your booking in just a few clicks.</p></div><img src="/img/step-book.svg" alt=""></div>
+      <svg class="icon lp-arrow"><use href="/vendor/icons/sprite.svg#arrow-right"/></svg>
+      <div class="lp-step"><span class="lp-step-no">3</span><div class="lp-step-body"><h3>Park</h3><p>Head to the parking lot and enjoy your spot!</p></div><img src="/img/step-park.svg" alt=""></div>
+    </div>
+  </section>
+</main>
+
+<div class="lp-hills"><img src="/img/hills.svg" alt=""><div class="lp-foot">© 2026 ParkWise</div></div>
+</div>
+
+<script type="module">
+  import { me, homeFor } from "/js/api.js";
+  import { bkkDateString } from "/js/format.js";
+
+  const dateEl = document.getElementById("s-date");
+  const timeEl = document.getElementById("s-time");
+  const hoursEl = document.getElementById("s-hours");
+
+  // Time list: every 30 minutes, shown as "10:00 AM" (the form still sends 24-hour "10:00")
+  const label12 = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`; };
+  for (let m = 0; m < 24 * 60; m += 30) {
+    const v = `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    timeEl.append(new Option(label12(v), v));
+  }
+  const bkkHour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Bangkok", hour: "2-digit", hour12: false }).format(new Date()));
+  timeEl.value = `${String((bkkHour + 1) % 24).padStart(2, "0")}:00`;
+
+  const today = bkkDateString();
+  dateEl.value = dateEl.min = today;
+
+  function refresh() {
+    const [y, mo, d] = dateEl.value.split("-").map(Number);
+    document.getElementById("d-label").textContent = dateEl.value
+      ? new Date(Date.UTC(y, mo - 1, d)).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" }) : "Select date";
+    document.getElementById("t-label").textContent = label12(timeEl.value);
+    document.getElementById("h-label").textContent = hoursEl.selectedOptions[0].textContent;
+  }
+  [dateEl, timeEl, hoursEl].forEach((el) => el.addEventListener("change", refresh));
+  refresh();
+
+  const user = await me().catch(() => null);
+  if (user) {
+    document.getElementById("login-btn").remove();
+    const b = document.getElementById("auth-btn");
+    b.className = "btn push"; b.style.display = ""; b.href = homeFor(user); b.textContent = "My account";
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Styleguide – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+
+  <!-- Stats: one panel, split by rules -->
+  <section class="card stats" aria-label="Summary">
+    <div class="stat">
+      <div class="stat-label">Open bays right now</div>
+      <div class="stat-value">6<small>of 20</small></div>
+      <div class="stat-sub">Ready to book</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Upcoming reservations</div>
+      <div class="stat-value">2</div>
+      <div class="stat-sub"><a href="#">View reservations</a></div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Spent this month</div>
+      <div class="stat-value" id="money"></div>
+      <div class="stat-sub">12% less than October</div>
+    </div>
+  </section>
+
+  <!-- Bay map + booking panel -->
+  <div class="grid grid-main mt-3">
+    <section class="card">
+      <div class="card-head">
+        <h2>Choose a bay</h2>
+        <button class="btn btn-secondary btn-sm"><span data-i="funnel"></span>Filter</button>
+      </div>
+      <div class="card-body">
+        <div class="slot-map">
+          <div class="slot-map-head"><span>Level 1</span><span>Entrance at left</span></div>
+          <div class="slot-row" id="row1"></div>
+          <div class="lane"><span>Driving lane</span></div>
+          <div class="slot-row" id="row2" data-side="bottom"></div>
+          <div class="slot-map-foot"><span>Entry and exit</span><span>Lot A, Level 1</span></div>
+        </div>
+        <div class="legend" id="legend"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Reservation details</h2><span class="small muted">Step 1 of 2</span></div>
+      <div class="card-body">
+        <div class="segmented" id="mode"><button aria-pressed="true">Book now</button><button aria-pressed="false">Book ahead</button></div>
+        <div class="field mt-2"><label class="label">Parking lot</label><select class="select"><option>Lot A, Siam Square</option><option>Lot B, Silom</option></select></div>
+        <div class="row mt-2">
+          <div class="field"><label class="label">Arrival date</label><input class="input" type="date"></div>
+          <div class="field"><label class="label">Arrival time</label><select class="select"><option>10:00</option><option>10:30</option></select></div>
+        </div>
+        <div class="field mt-2"><label class="label">Length of stay</label>
+          <div class="stepper"><button id="dec" aria-label="Fewer hours"><span data-i="chevron-left"></span></button><output id="dur"></output><button id="inc" aria-label="More hours"><span data-i="chevron-right"></span></button></div>
+        </div>
+        <div class="field mt-2 invalid"><label class="label">Your vehicle</label><select class="select"><option>Select a vehicle</option></select><div class="field-error">Select a vehicle to continue.</div></div>
+        <div class="kv mt-2"><div><span class="k">Selected bay</span><span class="badge tone-ok">A03</span></div></div>
+        <div class="total-row"><span class="muted small" id="calc"></span><span class="amount" id="total"></span></div>
+        <button class="btn btn-primary btn-block mt-2" id="book">Reserve bay A03</button>
+        <button class="btn btn-secondary btn-block mt-1" id="busy">Show loading state</button>
+      </div>
+    </section>
+  </div>
+
+  <!-- Countdown -->
+  <div class="countdown-bar mt-3" id="cd">
+    <span data-i="clock"></span><span>Bay A03 is held for you. Confirm within</span><span class="time" id="cd-time"></span>
+    <button class="btn btn-primary btn-sm">Confirm reservation</button>
+  </div>
+
+  <!-- Table -->
+  <section class="card">
+    <div class="card-head"><h2>My reservations</h2><a class="btn btn-ghost btn-sm" href="#">View all</a></div>
+    <div class="card-body table-wrap"><table class="table">
+      <thead><tr><th>Vehicle</th><th>Bay</th><th>Date and time</th><th>Status</th><th class="num">Fee</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </section>
+
+  <!-- Bay list (staff) + kv -->
+  <div class="grid grid-main mt-3">
+    <section class="card"><div class="card-head"><h2>Lot A, Siam Square</h2><span class="badge tone-ok">6 bays free</span></div>
+      <div class="card-body"><div class="slot-list" id="chips"></div></div></section>
+    <section class="card"><div class="card-head"><h2>System status</h2></div>
+      <div class="card-body"><div class="kv">
+        <div><span class="k">MySQL</span><span class="badge tone-ok">Online</span></div>
+        <div><span class="k">MongoDB</span><span class="badge tone-bad">Offline</span></div>
+        <div><span class="k">Outbox queued</span><span class="v">3 items</span></div>
+      </div></div></section>
+  </div>
+
+  <!-- Feedback -->
+  <section class="card card-pad mt-3 stack">
+    <h2>Messages and feedback</h2>
+    <div class="alert alert-error"><span data-i="triangle-alert"></span><span>This bay was just reserved for that time.</span></div>
+    <div class="alert alert-warn"><span data-i="clock"></span><span>15 minutes of parking time left.</span></div>
+    <div class="alert alert-info"><span data-i="info"></span><span>Advance bookings can be cancelled up to 1 hour before they start.</span></div>
+    <div class="alert alert-ok"><span data-i="circle-check"></span><span>Checked in.</span></div>
+    <div class="flex wrap">
+      <button class="btn btn-secondary" id="t-ok">Success toast</button>
+      <button class="btn btn-secondary" id="t-err">Error toast</button>
+      <button class="btn btn-danger" id="confirm">Confirm dialog</button>
+      <button class="btn btn-ghost">Ghost button</button>
+      <button class="btn btn-primary btn-sm">Small</button>
+      <button class="btn btn-primary btn-lg">Large</button>
+    </div>
+    <div class="grid grid-2">
+      <div class="card" id="empty"></div>
+      <div class="card card-pad stack"><div class="skeleton" style="height:18px;width:40%"></div><div class="skeleton" style="height:12px"></div><div class="skeleton" style="height:12px;width:80%"></div></div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, $$, toast, confirmDialog, startCountdown, reservationBadge, slotClass, slotLabel, emptyState, setBusy } from "/js/ui.js";
+  import { fmtMoney, fmtRange, SLOT_STATUS } from "/js/format.js";
+
+  const role = ["Customer", "Staff", "Admin"].includes(new URLSearchParams(location.search).get("role"))
+    ? new URLSearchParams(location.search).get("role") : "Customer";
+  await mountShell({ role, active: "dashboard", title: "Styleguide",
+    previewUser: { full_name: "Warin Jaidee", email: "warin@example.com", role, counts: { active_reservations: 2, unread_notifications: 1 } } });
+
+  // icons declared as data-i in static markup
+  $$("[data-i]").forEach((el) => render(el, icon(el.dataset.i, el.dataset.c || "icon")));
+
+  pageHeader($("#head"), {
+    title: "Hello, Warin",
+    subtitle: "Where are you parking today? We have open bays waiting.",
+    actions: html`<a class="btn btn-primary" href="#">${icon("plus")} Reserve a bay</a>`,
+  });
+
+  $("#money").textContent = fmtMoney(640);
+
+  // bay map with every status
+  const slots = [
+    ["A01", "Available", "EV charging"], ["A02", "Occupied"], ["A03", "Available"], ["A04", "Reserved"], ["A05", "Available"], ["A06", "Held"],
+    ["A07", "Available"], ["A08", "Maintenance"], ["A09", "Occupied"], ["A10", "Available"], ["A11", "Available"], ["A12", "Reserved"],
+  ];
+  const tile = ([code, st, note]) => st === "Available"
+    ? html`<button class="slot ${slotClass(st)}" aria-pressed="${code === "A03"}" data-code="${code}"><span class="slot-code">${code}</span><span class="slot-body">${icon(note ? "zap" : "car")}<span class="slot-note">${note || slotLabel(st)}</span></span></button>`
+    : html`<div class="slot ${slotClass(st)}"><span class="slot-code">${code}</span><span class="slot-body">${icon("car")}<span class="slot-note">${slotLabel(st)}</span></span></div>`;
+  render($("#row1"), slots.slice(0, 6).map(tile));
+  render($("#row2"), slots.slice(6).map(tile));
+  render($("#legend"), Object.entries(SLOT_STATUS).map(([k, v]) => html`<span class="${v.cls}">${v.label}</span>`));
+  $("#page").addEventListener("click", (e) => {
+    const b = e.target.closest("button.slot");
+    if (!b) return;
+    $$("button.slot").forEach((x) => x.setAttribute("aria-pressed", x === b));
+  });
+  render($("#chips"), slots.map(([c, st, note]) => html`<div class="slot-chip ${slotClass(st)}"><b>${c}</b><small>${note || "Standard"}</small><span class="right">${slotLabel(st)}</span></div>`));
+
+  // segmented + stepper + price
+  $$("#mode button").forEach((b) => b.onclick = () => $$("#mode button").forEach((x) => x.setAttribute("aria-pressed", x === b)));
+  let hours = 2;
+  const drawDur = () => {
+    render($("#dur"), html`<b>${hours}</b>${hours === 1 ? "hour" : "hours"}`);
+    $("#dec").disabled = hours <= 1; $("#inc").disabled = hours >= 12;
+    $("#calc").textContent = `${fmtMoney(20)} × ${hours} ${hours === 1 ? "hour" : "hours"}`;
+    $("#total").textContent = fmtMoney(20 * hours, 2);
+  };
+  $("#dec").onclick = () => { hours = Math.max(1, hours - 1); drawDur(); };
+  $("#inc").onclick = () => { hours = Math.min(12, hours + 1); drawDur(); };
+  drawDur();
+  $("#busy").onclick = (e) => { setBusy(e.currentTarget, true); setTimeout(() => setBusy(e.currentTarget, false), 1500); };
+
+  // countdown (5 minutes from now)
+  startCountdown($("#cd-time"), new Date(Date.now() + 5 * 60000).toISOString(), new Date().toISOString(),
+    () => $("#cd").classList.add("expired"));
+
+  // table rows covering every reservation status
+  const now = Date.now(), h = 3600000;
+  const rows = [
+    ["1AB 2345", "Toyota Yaris, white", "A03", "Confirmed", null, 0, 2, null],
+    ["2CD 6789", "Honda City, grey", "B08", "Held", null, 1, 3, null],
+    ["3EF 1357", "Mazda 2", "A01", "Confirmed", "awaiting_checkin", -0.2, 2, null],
+    ["1AB 2345", "Toyota Yaris", "A05", "In Use", null, -1, 1, null],
+    ["1AB 2345", "Toyota Yaris", "A02", "Completed", null, -26, -24, 140],
+    ["2CD 6789", "Honda City", "B01", "No-show", null, -50, -48, null],
+    ["2CD 6789", "Honda City", "B03", "Cancelled", null, -72, -70, null],
+  ];
+  render($("#rows"), rows.map(([plate, car, slot, st, label, s, e, fee]) => html`<tr>
+    <td><div class="cell-main"><span class="cell-ic">${icon("car")}</span><div><b>${plate}</b><small>${car}</small></div></div></td>
+    <td><b>${slot}</b><span class="cell-sub">Lot A</span></td>
+    <td>${fmtRange(new Date(now + s * h), new Date(now + e * h))}</td>
+    <td>${reservationBadge(st, label)}</td>
+    <td class="num">${fee ? fmtMoney(fee) : "–"}</td>
+    <td class="actions"><button class="icon-btn" aria-label="More options">${icon("ellipsis")}</button></td></tr>`));
+
+  render($("#empty"), emptyState({ iconName: "car", title: "No vehicles yet", text: "Add at least one licence plate before you reserve a bay.",
+    action: html`<button class="btn btn-primary btn-sm">${icon("plus")} Add vehicle</button>` }));
+
+  $("#t-ok").onclick = () => toast("Changes saved.");
+  $("#t-err").onclick = () => toast("This bay was just reserved for that time.", "error");
+  $("#confirm").onclick = async () => {
+    const yes = await confirmDialog({ title: "Cancel reservation for A03?", message: "A cancelled reservation can't be restored.", confirmText: "Cancel reservation", cancelText: "Keep it", danger: true });
+    toast(yes ? "Reservation cancelled." : "Reservation kept.", yes ? "success" : "info");
+  };
+</script>
+</body>
+</html>

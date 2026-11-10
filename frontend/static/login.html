@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Log in – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="auth">
+ <div class="auth-shell">
+  <aside class="auth-side art-login">
+    <a class="brand" href="/login.html"><span class="brand-mark">P</span><span class="brand-text">Park<b>Wise</b></span></a>
+    <p class="tagline">Parking, made simple.</p>
+  </aside>
+
+  <main class="auth-main">
+    <div class="auth-card">
+      <h1>Welcome back!</h1>
+      <p class="sub">Log in to continue to ParkWise</p>
+
+      <div class="alert alert-ok" id="registered" hidden style="margin-bottom:14px">
+        <svg class="icon"><use href="/vendor/icons/sprite.svg#circle-check"/></svg>
+        <span>Account created. You can log in now.</span>
+      </div>
+
+      <form id="login-form" novalidate>
+        <div class="alert alert-error" data-form-error hidden style="margin-bottom:14px"></div>
+        <div class="field">
+          <div class="input-icon">
+            <svg class="icon"><use href="/vendor/icons/sprite.svg#mail"/></svg>
+            <input class="input" id="email" name="email" type="email" autocomplete="username" placeholder="Email address" aria-label="Email address" required>
+          </div>
+        </div>
+        <div class="field">
+          <div class="input-icon">
+            <svg class="icon"><use href="/vendor/icons/sprite.svg#lock"/></svg>
+            <input class="input" id="password" name="password" type="password" autocomplete="current-password" placeholder="Password" aria-label="Password" required>
+            <button type="button" class="icon-btn input-action" id="toggle-pw" aria-label="Show password">
+              <svg class="icon"><use href="/vendor/icons/sprite.svg#eye-off"/></svg>
+            </button>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-lg btn-block btn-arrow" type="submit">Log in</button>
+      </form>
+
+
+      <p class="auth-alt">Don't have an account? <a href="/register.html">Sign up</a></p>
+
+      <!-- Demo accounts from database/seed.sql (password Passw0rd!). Remove before real use. -->
+      <details class="demo-box" id="demo-box">
+        <summary>Demo accounts</summary>
+        <div class="demo-list">
+          <button type="button" class="btn btn-secondary btn-sm" data-demo="somchai@example.com">Customer</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-demo="staff1@parkwise.local">Staff</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-demo="admin@parkwise.local">Administrator</button>
+        </div>
+      </details>
+    </div>
+  </main>
+ </div>
+</div>
+
+<script type="module">
+  import { login, me, homeFor, safeNext } from "/js/api.js";
+  import { $, $$, formValues, showFormErrors, clearFormErrors, setBusy, getParam, toast } from "/js/ui.js";
+  import { fmtTime } from "/js/format.js";
+
+  const form = $("#login-form");
+  const pw = $("#password");
+
+  // Already logged in -> go straight to the role's home page
+  const current = await me().catch(() => null);
+  if (current) location.replace(safeNext(getParam("next"), homeFor(current)));
+
+  if (getParam("registered")) {
+    $("#registered").hidden = false;
+    form.email.value = getParam("email") || "";
+  }
+
+  // The eye-off icon means "hidden"; click to reveal (icon switches to eye)
+  $("#toggle-pw").onclick = (e) => {
+    const show = pw.type === "password";
+    pw.type = show ? "text" : "password";
+    e.currentTarget.setAttribute("aria-label", show ? "Hide password" : "Show password");
+    e.currentTarget.querySelector("use").setAttribute("href", `/vendor/icons/sprite.svg#${show ? "eye" : "eye-off"}`);
+  };
+
+
+  $$("[data-demo]").forEach((b) => b.onclick = () => {
+    form.email.value = b.dataset.demo;
+    pw.value = "Passw0rd!";
+    clearFormErrors(form);
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const { email, password } = formValues(form);
+    const missing = {};
+    if (!email) missing.email = "Enter your email.";
+    if (!password) missing.password = "Enter your password.";
+    if (Object.keys(missing).length) return showFormErrors(form, { fields: missing });
+
+    const btn = form.querySelector("[type=submit]");
+    setBusy(btn, true);
+    try {
+      const user = await login(email, password);
+      location.replace(safeNext(getParam("next"), homeFor(user)));
+    } catch (err) {
+      if (err.code === "ACCOUNT_LOCKED" && err.extra?.locked_until) {
+        err.message = `Too many failed login attempts. This account is locked until ${fmtTime(err.extra.locked_until)}.`;
+      }
+      showFormErrors(form, err);
+      pw.value = "";
+    } finally {
+      setBusy(btn, false);
+    }
+  });
+</script>
+</body>
+</html>

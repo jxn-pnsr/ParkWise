@@ -573,12 +573,6 @@ html:not([data-theme="dark"]) .lane > span { background: #F3EFE4; color: #6F7770
 .auth-card .field + .field { margin-top: 14px; }
 .auth-card .input { height: 50px; }
 .auth-card .btn-block { margin-top: 22px; height: 52px; font-size: 16.5px; }
-.or-line { display: flex; align-items: center; gap: 14px; margin: 18px 0 14px; font-size: 14px; color: var(--text-2); }
-.or-line::before, .or-line::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
-.social { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.btn-social { height: 48px; background: #fff; border: 1px solid var(--border-strong); color: var(--text); font-weight: 500; gap: 10px; }
-.btn-social:hover { background: var(--surface-2); }
-.btn-social svg { width: 20px; height: 20px; }
 .auth-alt { text-align: center; margin-top: 22px; font-size: 14.5px; color: var(--text-2); }
 .auth-alt a { font-weight: 700; color: #2C6B4A; }
 .auth-mobile-brand { display: none; margin-bottom: 24px; }
