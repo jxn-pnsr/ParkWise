@@ -206,20 +206,7 @@ CREATE TABLE Payments (
   CONSTRAINT chk_payment_paid   CHECK (status <> 'Paid' OR (paid_at IS NOT NULL AND method IS NOT NULL))
 ) ENGINE=InnoDB;
 
--- ---------------------------------------------------------------
--- Integration_Outbox (MySQL -> MongoDB sync)
--- Rows are written in the same transaction as the main data.
--- The worker reads Pending rows ordered by seq and writes them to MongoDB.
---
--- payload JSON format:
---   entity_type, entity_id, actor_user_id, actor_role, ip_address,
---   target_user_id   (who receives the notification, optional)
---   metadata         (any extra fields)
---   notify  { type, title, message }       -> creates a Notification
---   session { reservationId, plateNumber, lotName, slotCode, checkInAt,
---             checkOutAt, durationMinutes, fees, isOverstay }
---                                          -> creates/updates a Parking_Session
--- ---------------------------------------------------------------
+
 CREATE TABLE Integration_Outbox (
   event_id     CHAR(36)     NOT NULL,                      -- UUID made by the backend
   seq          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,    -- keeps events in order
@@ -239,9 +226,8 @@ CREATE TABLE Integration_Outbox (
   CONSTRAINT chk_outbox_sent CHECK (status <> 'Sent' OR sent_at IS NOT NULL)
 ) ENGINE=InnoDB;
 
--- ---------------------------------------------------------------
+
 -- Default config values
--- ---------------------------------------------------------------
 INSERT INTO System_Config (config_key, config_value, description) VALUES
  ('HOLD_MINUTES',                     '5',  'Minutes a slot is held while waiting for confirmation'),
  ('NOSHOW_GRACE_MINUTES',             '30', 'Minutes after start time before a reservation becomes No-show'),
@@ -260,10 +246,7 @@ INSERT INTO System_Config (config_key, config_value, description) VALUES
  ('LOGIN_MAX_FAILED',                 '5',  'Failed logins before the account is locked'),
  ('LOGIN_LOCK_MINUTES',               '5',  'Minutes the account stays locked');
 
--- ---------------------------------------------------------------
 -- Views
--- ---------------------------------------------------------------
-
 -- reservation + user + vehicle + slot + lot + payment (good for the JOIN screenshot)
 CREATE VIEW v_reservation_details AS
 SELECT r.reservation_id, r.status, r.booking_type,
@@ -314,9 +297,7 @@ FROM Parking_Lots l
 LEFT JOIN v_slot_current_status c ON c.lot_id = l.lot_id
 GROUP BY l.lot_id, l.lot_name, l.is_active;
 
--- ---------------------------------------------------------------
 -- Reference queries for the backend (not executed here, use parameters)
--- ---------------------------------------------------------------
 -- (A) free slots in a lot for the range [:start, :end)
 --   SELECT s.slot_id, s.slot_code
 --   FROM Parking_Slots s
