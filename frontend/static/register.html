@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign up – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<div class="auth">
+ <div class="auth-shell">
+  <aside class="auth-side art-register">
+    <a class="brand" href="/login.html"><span class="brand-mark">P</span><span class="brand-text">Park<b>Wise</b></span></a>
+    <p class="tagline">Smart parking<br>for a smoother day.</p>
+  </aside>
+
+  <main class="auth-main">
+    <div class="auth-card">
+      <h1>Create your account</h1>
+      <p class="sub">Join ParkWise today</p>
+
+      <form id="register-form" novalidate>
+        <div class="alert alert-error" data-form-error hidden style="margin-bottom:14px"></div>
+        <div class="field">
+          <div class="input-icon">
+            <svg class="icon"><use href="/vendor/icons/sprite.svg#user-round"/></svg>
+            <input class="input" id="full_name" name="full_name" autocomplete="name" maxlength="100" placeholder="Full name" aria-label="Full name" required>
+          </div>
+        </div>
+        <div class="field">
+          <div class="input-icon">
+            <svg class="icon"><use href="/vendor/icons/sprite.svg#mail"/></svg>
+            <input class="input" id="email" name="email" type="email" autocomplete="email" maxlength="255" placeholder="Email address" aria-label="Email address" required>
+          </div>
+        </div>
+        <div class="field">
+          <div class="input-icon">
+            <svg class="icon"><use href="/vendor/icons/sprite.svg#lock"/></svg>
+            <input class="input" id="password" name="password" type="password" autocomplete="new-password" placeholder="Password" aria-label="Password (at least 8 characters)" required>
+            <button type="button" class="icon-btn input-action" id="toggle-pw" aria-label="Show password">
+              <svg class="icon"><use href="/vendor/icons/sprite.svg#eye-off"/></svg>
+            </button>
+          </div>
+        </div>
+        <button class="btn btn-primary btn-lg btn-block btn-arrow" type="submit">Sign up</button>
+      </form>
+
+
+      <p class="auth-alt">Already have an account? <a href="/login.html">Log in</a></p>
+    </div>
+  </main>
+ </div>
+</div>
+
+<script type="module">
+  import { register } from "/js/api.js";
+  import { $, $$, formValues, showFormErrors, setBusy, toast } from "/js/ui.js";
+
+  const form = $("#register-form");
+  const pw = $("#password");
+
+  $("#toggle-pw").onclick = (e) => {
+    const show = pw.type === "password";
+    pw.type = show ? "text" : "password";
+    e.currentTarget.setAttribute("aria-label", show ? "Hide password" : "Show password");
+    e.currentTarget.querySelector("use").setAttribute("href", `/vendor/icons/sprite.svg#${show ? "eye" : "eye-off"}`);
+  };
+
+
+  function validate(v) {
+    const f = {};
+    if (!v.full_name) f.full_name = "Enter your name.";
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.email)) f.email = "Enter a valid email address.";
+    if ((v.password || "").length < 8) f.password = "Password must be at least 8 characters.";
+    return f;
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = formValues(form);
+    const errors = validate(v);
+    if (Object.keys(errors).length) return showFormErrors(form, { fields: errors });
+
+    const btn = form.querySelector("[type=submit]");
+    setBusy(btn, true);
+    try {
+      // role is never sent: the backend always creates a Customer (security rule 1).
+      // Phone is optional in the API and not asked for here.
+      await register({ full_name: v.full_name, email: v.email, phone: null, password: v.password });
+      location.href = "/login.html?registered=1&email=" + encodeURIComponent(v.email);
+    } catch (err) {
+      showFormErrors(form, err);
+    } finally {
+      setBusy(btn, false);
+    }
+  });
+</script>
+</body>
+</html>

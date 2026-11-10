@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<!--
+  COPY THIS FILE to start a new page, e.g. static/customer/vehicles.html
+  1. Change <title>, role and active key (keys are in /js/shell.js NAV)
+  2. Put the page content inside <main id="page">
+  3. Load data with api.get(...) and draw it with html`` (auto-escapes = no XSS)
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+
+  <section class="card">
+    <div class="card-head"><h2>Card title</h2></div>
+    <div class="card-body" id="list"></div>
+  </section>
+</main>
+
+<script type="module">
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, toastError, emptyState } from "/js/ui.js";
+
+  const user = await mountShell({ role: "Customer", active: "dashboard" });
+
+  pageHeader($("#head"), {
+    title: "Page title",
+    subtitle: "One short sentence about this page.",
+    actions: html`<a class="btn btn-primary" href="/customer/lots.html">${icon("plus")} Reserve a bay</a>`,
+  });
+
+  try {
+    // const data = await api.get("/me/vehicles");
+    render($("#list"), emptyState({ title: "Nothing here yet", text: "Your data will show up here." }));
+  } catch (err) {
+    toastError(err);
+  }
+</script>
+</body>
+</html>
