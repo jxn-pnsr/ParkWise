@@ -84,20 +84,30 @@ def apply_event(db, event_id, event_type, payload, occurred_at):
     # 3) check-in / check-out events create or update the parking session
     session = payload.get("session")
     if session and session.get("reservationId") is not None:
+        # Only $set values the event actually has. Events can arrive out of order
+        # (a failed checkin.done retried after checkout.done), so a missing or null
+        # value must never wipe what a later event already wrote (fixed in phase 1).
         fields = {}
-        for key in ("userId", "vehicleId", "plateNumber", "lotName", "slotCode", "isOverstay"):
-            if key in session:
+        for key in ("userId", "vehicleId", "plateNumber", "lotName", "slotCode"):
+            if session.get(key) is not None:
                 fields[key] = session[key]
-        fields["checkInAt"] = parse_iso(session.get("checkInAt"))
-        fields["checkOutAt"] = parse_iso(session.get("checkOutAt"))
-        fields["durationMinutes"] = session.get("durationMinutes")
+        if session.get("isOverstay"):          # true is final; false never undoes it
+            fields["isOverstay"] = True
+        for key in ("checkInAt", "checkOutAt"):
+            if session.get(key):
+                fields[key] = parse_iso(session[key])
+        if session.get("durationMinutes") is not None:
+            fields["durationMinutes"] = session["durationMinutes"]
         if session.get("fees"):
             fields["fees"] = session["fees"]
         fields["updatedAt"] = occurred_at
+        on_insert = {"reservationId": session["reservationId"], "createdAt": occurred_at}
+        if "isOverstay" not in fields:
+            on_insert["isOverstay"] = False
         db.Parking_Sessions.update_one(
             {"reservationId": session["reservationId"]},
             {"$set": fields,
-             "$setOnInsert": {"reservationId": session["reservationId"], "createdAt": occurred_at},
+             "$setOnInsert": on_insert,
              "$addToSet": {"source_event_ids": event_id}},
             upsert=True)
 

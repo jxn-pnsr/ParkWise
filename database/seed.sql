@@ -67,6 +67,9 @@ INSERT INTO Parking_Slots (slot_id, lot_id, slot_code, slot_status) VALUES
  (11,2,'B1','Active'),(12,2,'B2','Active'),(13,2,'B3','Active'),(14,2,'B4','Active'),(15,2,'B5','Active'),
  (16,2,'B6','Active'),(17,2,'B7','Active'),(18,2,'B8','Active'),(19,2,'B9','Active'),(20,2,'B10','Maintenance');
 
+-- EV charging bays (phase 1: matches the bay map design)
+UPDATE Parking_Slots SET slot_type = 'EV' WHERE slot_id IN (1, 11);
+
 -- Reservations (times are minutes relative to now)
 --
 --  id  user veh slot type     start..end         status     used for
