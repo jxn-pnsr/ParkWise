@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Profile – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <div class="dash-grid" style="grid-template-columns:1fr 1fr">
+    <section class="panel" aria-labelledby="p-title">
+      <div class="panel-head"><h2 id="p-title">Your details</h2></div>
+      <form class="res-form" id="profile" novalidate>
+        <div class="alert alert-error" data-form-error hidden></div>
+        <div class="field"><label class="label" for="full_name">Full name</label>
+          <input class="input" id="full_name" name="full_name" maxlength="150" autocomplete="name" required></div>
+        <div class="field"><label class="label" for="email">Email</label>
+          <input class="input" id="email" type="email" disabled>
+          <span class="hint">Your email is your login and cannot be changed.</span></div>
+        <div class="field"><label class="label" for="phone">Phone (optional)</label>
+          <input class="input" id="phone" name="phone" type="tel" inputmode="numeric" maxlength="20" placeholder="08xxxxxxxx" autocomplete="tel"></div>
+        <button class="btn btn-primary btn-rect btn-block" type="submit">Save details</button>
+        <p class="hint" id="since"></p>
+      </form>
+    </section>
+
+    <section class="panel" aria-labelledby="pw-title">
+      <div class="panel-head"><h2 id="pw-title">Change password</h2></div>
+      <form class="res-form" id="password" novalidate>
+        <div class="alert alert-error" data-form-error hidden></div>
+        <div class="field"><label class="label" for="current_password">Current password</label>
+          <input class="input" id="current_password" name="current_password" type="password" autocomplete="current-password" required></div>
+        <div class="field"><label class="label" for="new_password">New password</label>
+          <input class="input" id="new_password" name="new_password" type="password" autocomplete="new-password" required>
+          <span class="hint">At least 8 characters.</span></div>
+        <div class="field"><label class="label" for="new_password2">Repeat new password</label>
+          <input class="input" id="new_password2" name="new_password2" type="password" autocomplete="new-password" required></div>
+        <button class="btn btn-primary btn-rect btn-block" type="submit">Update password</button>
+      </form>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { $, toast, toastError, setBusy, formValues, showFormErrors, clearFormErrors } from "/js/ui.js";
+  import { fmtDate } from "/js/format.js";
+
+  await mountShell({ role: "Customer", active: "profile" });
+  pageHeader($("#head"), { title: "Profile", subtitle: "Keep your name and phone number up to date." });
+
+  const pf = $("#profile"), pw = $("#password");
+
+  function fill(p) {
+    pf.full_name.value = p.full_name || "";
+    $("#email").value = p.email;
+    pf.phone.value = p.phone || "";
+    $("#since").textContent = `Member since ${fmtDate(p.created_at)}`;
+  }
+  try { fill(await api.get("/me/profile")); } catch (err) { toastError(err); }
+
+  pf.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = formValues(pf);
+    if (!v.full_name) return showFormErrors(pf, { fields: { full_name: "Enter your name." } });
+    const btn = pf.querySelector("[type=submit]");
+    setBusy(btn, true);
+    try {
+      fill(await api.patch("/me/profile", { full_name: v.full_name, phone: v.phone || null }));
+      clearFormErrors(pf);
+      toast("Details saved.");
+      document.querySelector(".me-text b").textContent = v.full_name;   // sidebar name
+    } catch (err) { showFormErrors(pf, err); }
+    finally { setBusy(btn, false); }
+  });
+
+  pw.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = formValues(pw);
+    const errors = {};
+    if (!v.current_password) errors.current_password = "Enter your current password.";
+    if ((v.new_password || "").length < 8) errors.new_password = "Use at least 8 characters.";
+    if (v.new_password !== v.new_password2) errors.new_password2 = "The passwords do not match.";
+    if (Object.keys(errors).length) return showFormErrors(pw, { fields: errors });
+    const btn = pw.querySelector("[type=submit]");
+    setBusy(btn, true);
+    try {
+      await api.post("/me/password", { current_password: v.current_password, new_password: v.new_password });
+      pw.reset();
+      clearFormErrors(pw);
+      toast("Password updated.");
+    } catch (err) { showFormErrors(pw, err); }
+    finally { setBusy(btn, false); }
+  });
+</script>
+</body>
+</html>

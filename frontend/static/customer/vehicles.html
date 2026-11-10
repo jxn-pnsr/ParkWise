@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My vehicles – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <div class="dash-grid">
+    <section class="panel" aria-labelledby="list-title">
+      <div class="panel-head"><h2 id="list-title">Registered vehicles</h2><span class="step" id="count"></span></div>
+      <div id="list"></div>
+    </section>
+    <section class="panel" aria-labelledby="form-title">
+      <div class="panel-head"><h2 id="form-title">Add a vehicle</h2></div>
+      <form class="res-form" id="form" novalidate>
+        <div class="alert alert-error" data-form-error hidden></div>
+        <div class="field">
+          <label class="label" for="plate_number">Licence plate</label>
+          <input class="input" id="plate_number" name="plate_number" maxlength="20" placeholder="e.g. 1AB 1234" autocomplete="off" required>
+        </div>
+        <div class="field">
+          <label class="label" for="province">Province</label>
+          <input class="input" id="province" name="province" maxlength="60" list="provinces" placeholder="e.g. Bangkok" required>
+          <datalist id="provinces"></datalist>
+        </div>
+        <label class="flex small" style="gap:8px;margin-top:4px"><input type="checkbox" name="is_default" id="is_default"> Make this my main vehicle</label>
+        <button class="btn btn-primary btn-rect btn-block" type="submit" id="save">Add vehicle</button>
+        <button class="btn btn-secondary btn-block" type="button" id="cancel-edit" hidden>Cancel editing</button>
+        <p class="hint">Staff find your booking by licence plate, so type it exactly as it appears on the car.</p>
+      </form>
+    </section>
+  </div>
+</main>
+
+<script type="module">
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, $$, toast, toastError, setBusy, confirmDialog, emptyState, formValues, showFormErrors, clearFormErrors, getParam } from "/js/ui.js";
+  import { fmtDate } from "/js/format.js";
+
+  await mountShell({ role: "Customer", active: "vehicles" });
+  pageHeader($("#head"), { title: "My vehicles", subtitle: "Add the cars you park with. Your main vehicle is chosen first when you book." });
+
+  const PROVINCES = ["Bangkok", "Nonthaburi", "Pathum Thani", "Samut Prakan", "Nakhon Pathom", "Samut Sakhon",
+    "Chonburi", "Chiang Mai", "Phuket", "Khon Kaen", "Nakhon Ratchasima", "Songkhla", "Rayong", "Ayutthaya"];
+  render($("#provinces"), PROVINCES.map((p) => html`<option value="${p}"></option>`));
+
+  const form = $("#form");
+  let vehicles = [], editing = null;
+
+  function draw() {
+    $("#count").textContent = vehicles.length ? `${vehicles.length} vehicle${vehicles.length > 1 ? "s" : ""}` : "";
+    if (!vehicles.length) {
+      render($("#list"), emptyState({ iconName: "car", title: "No vehicles yet", text: "Add your first car using the form. It becomes your main vehicle." }));
+      return;
+    }
+    render($("#list"), html`<div class="table-wrap"><table class="table">
+      <thead><tr><th>Vehicle</th><th>Added</th><th class="actions"><span class="sr-only">Actions</span></th></tr></thead>
+      <tbody>${vehicles.map((v) => html`<tr>
+        <td><div class="cell-main"><span class="cell-ic">${icon("car")}</span><div>
+          <b>${v.plate_number} ${v.is_default ? html`<span class="badge tone-ok plain" style="margin-left:6px">Main</span>` : ""}</b>
+          <small>${v.province}</small></div></div></td>
+        <td>${fmtDate(v.created_at)}</td>
+        <td class="actions"><div class="flex" style="justify-content:flex-end">
+          ${v.is_default ? "" : html`<button class="btn btn-ghost btn-sm" data-default="${v.vehicle_id}">Make main</button>`}
+          <button class="btn btn-secondary btn-sm" data-edit="${v.vehicle_id}">Edit</button>
+          <button class="btn btn-secondary btn-sm" data-delete="${v.vehicle_id}" aria-label="Delete ${v.plate_number}">${icon("x", "icon icon-sm")}</button>
+        </div></td></tr>`)}</tbody></table></div>`);
+    $$("[data-default]").forEach((b) => b.onclick = () => makeDefault(b));
+    $$("[data-edit]").forEach((b) => b.onclick = () => startEdit(Number(b.dataset.edit)));
+    $$("[data-delete]").forEach((b) => b.onclick = () => remove(b));
+  }
+
+  async function load() {
+    try { vehicles = await api.get("/me/vehicles"); draw(); } catch (err) { toastError(err); }
+  }
+
+  async function makeDefault(btn) {
+    setBusy(btn, true);
+    try { vehicles = await api.post(`/me/vehicles/${btn.dataset.default}/default`); draw(); toast("Main vehicle updated."); }
+    catch (err) { toastError(err); setBusy(btn, false); }
+  }
+
+  async function remove(btn) {
+    const v = vehicles.find((x) => String(x.vehicle_id) === btn.dataset.delete);
+    if (!(await confirmDialog({ title: `Delete ${v.plate_number}?`, message: "Past bookings stay in your history. You can add the car again later.", confirmText: "Delete", danger: true }))) return;
+    setBusy(btn, true);
+    try { await api.del(`/me/vehicles/${v.vehicle_id}`); toast("Vehicle deleted."); if (editing === v.vehicle_id) stopEdit(); load(); }
+    catch (err) { toast(err.message, "error", 6000); setBusy(btn, false); }   // e.g. it has an active booking
+  }
+
+  function startEdit(id) {
+    const v = vehicles.find((x) => x.vehicle_id === id);
+    editing = id;
+    clearFormErrors(form);
+    form.plate_number.value = v.plate_number;
+    form.province.value = v.province;
+    $("#is_default").closest("label").hidden = true;
+    $("#form-title").textContent = `Edit ${v.plate_number}`;
+    $("#save").textContent = "Save changes";
+    $("#cancel-edit").hidden = false;
+    form.plate_number.focus();
+  }
+
+  function stopEdit() {
+    editing = null;
+    form.reset();
+    clearFormErrors(form);
+    $("#is_default").closest("label").hidden = false;
+    $("#form-title").textContent = "Add a vehicle";
+    $("#save").textContent = "Add vehicle";
+    $("#cancel-edit").hidden = true;
+  }
+  $("#cancel-edit").onclick = stopEdit;
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = formValues(form);
+    const errors = {};
+    if (!v.plate_number) errors.plate_number = "Enter the licence plate.";
+    if (!v.province) errors.province = "Enter the province.";
+    if (Object.keys(errors).length) return showFormErrors(form, { fields: errors });
+    const btn = $("#save");
+    setBusy(btn, true);
+    try {
+      if (editing) {
+        await api.patch(`/me/vehicles/${editing}`, { plate_number: v.plate_number, province: v.province });
+        toast("Vehicle updated.");
+      } else {
+        const added = await api.post("/me/vehicles", { plate_number: v.plate_number, province: v.province, is_default: $("#is_default").checked });
+        toast(`${added.plate_number} added.`);
+        if (getParam("back") === "lots") { location.href = "/customer/lots.html"; return; }
+      }
+      stopEdit();
+      load();
+    } catch (err) {
+      showFormErrors(form, err);
+    } finally {
+      setBusy(btn, false);
+    }
+  });
+
+  if (getParam("add")) form.plate_number.focus();
+  load();
+</script>
+</body>
+</html>
