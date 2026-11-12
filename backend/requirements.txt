@@ -1,0 +1,8 @@
+Flask>=3.0,<4
+PyMySQL>=1.1,<2
+cryptography>=42        # needed by PyMySQL for MySQL 8 caching_sha2_password login
+pymongo>=4.6,<5
+python-dotenv>=1.0,<2
+tzdata>=2024.1          # timezone data for Asia/Bangkok on Windows
+APScheduler>=3.10,<4    # used from phase 3
+pytest>=8,<9
