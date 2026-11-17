@@ -10,21 +10,87 @@
 <body>
 <main id="page" hidden>
   <div class="page-head" id="head"></div>
-  <section class="card" id="body"></section>
+  <section class="dash-stats four" id="stats" aria-label="Summary"></section>
+  <div id="alerts"></div>
+
+  <div class="stack-gap">
+    <section class="panel" aria-labelledby="arr-title">
+      <div class="panel-head"><h2 id="arr-title">Arriving soon</h2><span class="step">next 2 hours</span></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Plate</th><th>Customer</th><th>Bay</th><th>Booked</th><th>Status</th><th class="actions"><span class="sr-only">Action</span></th></tr></thead>
+        <tbody id="arriving"></tbody></table></div>
+    </section>
+
+    <section class="panel" aria-labelledby="park-title">
+      <div class="panel-head"><h2 id="park-title">Parked now</h2><button type="button" class="btn btn-outline" id="refresh"></button></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Plate</th><th>Customer</th><th>Bay</th><th>Booked until</th><th>Status</th><th class="actions"><span class="sr-only">Action</span></th></tr></thead>
+        <tbody id="parked"></tbody></table></div>
+    </section>
+  </div>
 </main>
 <script type="module">
-  // Phase 1 placeholder: login + layout work. Data cards come when the dashboard API is ready.
+  import { api } from "/js/api.js";
   import { mountShell, pageHeader } from "/js/shell.js";
-  import { html, icon, render, $, emptyState } from "/js/ui.js";
+  import { html, icon, render, $, toastError, reservationBadge, skeletonRows, emptyState } from "/js/ui.js";
+  import { fmtRange, fmtTime } from "/js/format.js";
+  import { wireActions } from "/js/staff.js";
 
-  const user = await mountShell({ role: "Staff", active: "dashboard" });
+  await mountShell({ role: "Staff", active: "dashboard" });
   pageHeader($("#head"), {
     title: "Today at the lot",
     subtitle: "Check vehicles in and out and keep an eye on bay status.",
     actions: html`<a class="btn btn-primary" href="/staff/search.html">${icon("search")} Find a booking</a>`,
   });
-  render($("#body"), emptyState({ iconName: "layout-grid", title: "This page is under construction",
-    text: "Sign-in and permissions are working. Overview data will appear once this page's API is ready." }));
+  render($("#refresh"), html`${icon("refresh-cw", "icon icon-sm")} Refresh`);
+
+  let d = null;
+  const all = () => [...(d?.arriving || []), ...(d?.parked || [])];
+  const find = (id) => all().find((r) => String(r.reservation_id) === String(id));
+
+  function row(r, whenText) {
+    return html`<tr>
+      <td><div class="cell-main"><span class="cell-ic">${icon("car")}</span><div><b>${r.vehicle.plate_number}</b><small>${r.vehicle.province}</small></div></div></td>
+      <td>${r.customer.full_name}${r.customer.phone ? html`<span class="cell-sub">${r.customer.phone}</span>` : ""}</td>
+      <td><b>${r.slot.slot_code}</b><span class="cell-sub">${r.slot.lot_name}</span></td>
+      <td>${whenText}</td>
+      <td>${reservationBadge(r.status, r.display_label)}</td>
+      <td class="actions">
+        ${r.can_checkin ? html`<button class="btn btn-primary btn-sm" data-in="${r.reservation_id}">Check in</button>` : ""}
+        ${r.can_checkout ? html`<button class="btn btn-primary btn-sm" data-out="${r.reservation_id}">Check out</button>` : ""}
+        ${r.checkin_note === "too_early" ? html`<span class="cell-sub">from ${fmtTime(r.checkin_window.from)}</span>` : ""}
+      </td></tr>`;
+  }
+
+  async function load() {
+    render($("#arriving"), skeletonRows(2, 6));
+    render($("#parked"), skeletonRows(2, 6));
+    try { d = await api.get("/staff/dashboard"); } catch (err) { toastError(err); return; }
+
+    render($("#stats"), html`
+      <article class="dash-stat"><div class="dash-stat-label">${icon("map-pin")}<span>Open bays now</span></div>
+        <div class="dash-stat-value green">${d.open_bays}<small>of ${d.total_bays}</small></div>
+        <div class="dash-stat-sub">${d.lots.map((l) => `${l.lot_name}: ${l.available_slots}`).join(" · ")}</div></article>
+      <article class="dash-stat"><div class="dash-stat-label">${icon("car")}<span>Parked now</span></div>
+        <div class="dash-stat-value">${d.parked_count}</div><div class="dash-stat-sub">cars in the lots</div></article>
+      <article class="dash-stat"><div class="dash-stat-label">${icon("clock")}<span>Waiting to check in</span></div>
+        <div class="dash-stat-value warn">${d.awaiting_checkin}</div><div class="dash-stat-sub">within 30 minutes</div></article>
+      <article class="dash-stat"><div class="dash-stat-label">${icon("triangle-alert")}<span>Overstaying</span></div>
+        <div class="dash-stat-value ${d.overstay_count ? "bad" : ""}">${d.overstay_count}</div><div class="dash-stat-sub">past their booked time</div></article>`);
+
+    render($("#alerts"), d.blocked.map((b) => html`<div class="alert alert-error" style="margin-bottom:14px">${icon("triangle-alert")}
+      <span><b>Bay ${b.slot_code}:</b> ${b.plate} is booked from ${fmtTime(b.start_time)} but ${b.blocked_by} has not left yet.
+      Ask an administrator to move the booking to another bay, or contact the driver.</span></div>`));
+
+    render($("#arriving"), d.arriving.length ? d.arriving.map((r) => row(r, fmtRange(r.start_time, r.end_time)))
+      : html`<tr><td colspan="6">${emptyState({ iconName: "calendar", title: "No arrivals in the next 2 hours" })}</td></tr>`);
+    render($("#parked"), d.parked.length ? d.parked.map((r) => row(r, html`${fmtTime(r.end_time)}${r.display_label === "overstay" ? html`<span class="cell-sub">late</span>` : ""}`))
+      : html`<tr><td colspan="6">${emptyState({ iconName: "car", title: "No cars parked right now" })}</td></tr>`);
+    wireActions($("#page"), find, load);
+  }
+  $("#refresh").onclick = load;
+  load();
+  setInterval(load, 60000);   // keep the board fresh
 </script>
 </body>
 </html>

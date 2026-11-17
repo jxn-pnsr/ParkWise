@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notifications – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="panel-head">
+      <div class="segmented" role="tablist" aria-label="Filter" style="min-width:220px">
+        <button type="button" aria-pressed="true" data-f="all">All</button>
+        <button type="button" aria-pressed="false" data-f="unread">Unread</button>
+      </div>
+      <button type="button" class="btn btn-outline" id="read-all">Mark all as read</button>
+    </div>
+    <div class="notice-list" id="list"></div>
+    <div id="more" class="mt-2" style="text-align:center"></div>
+  </section>
+</main>
+<script type="module">
+  // Notifications live in MongoDB. They are created by the outbox worker (booking events)
+  // and by administrators (announcements). Reading and deleting writes MongoDB directly.
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, $$, toast, toastError, emptyState } from "/js/ui.js";
+  import { fmtDateTime } from "/js/format.js";
+
+  await mountShell({ role: "Customer", active: "notifications" });
+  pageHeader($("#head"), { title: "Notifications", subtitle: "Booking updates, reminders and announcements.",
+    actions: html`<a class="btn btn-outline" href="/customer/preferences.html">${icon("sliders-horizontal")} Choose what you get</a>` });
+
+  const ICON = { reservation_confirmed: "circle-check", reservation_cancelled: "circle-x", hold_expired: "clock", no_show: "triangle-alert",
+    checkin_done: "car", checkout_done: "log-out", payment_paid: "wallet", overstay: "triangle-alert", overstay_warning: "clock", announcement: "bell" };
+  let filter = "all", page = 1, items = [], total = 0;
+
+  function setBadge(unread) {
+    const ping = document.querySelector("[data-bell] .ping");
+    if (!unread && ping) ping.remove();
+  }
+
+  function draw(unread) {
+    setBadge(unread);
+    if (!items.length) {
+      render($("#list"), emptyState({ iconName: "bell", title: filter === "unread" ? "You're all caught up" : "No notifications yet" }));
+      render($("#more"), "");
+      return;
+    }
+    render($("#list"), items.map((n) => html`<div class="notice ${n.is_read ? "" : "unread"}">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="cell-ic">${icon(ICON[n.type] || "bell")}</span>
+      <div class="notice-body"><b>${n.title}</b><p>${n.message}</p>
+        <div class="notice-meta">${fmtDateTime(n.sent_at)}${n.reservation_id ? html` · <a href="/customer/reservations.html">Reservation #${n.reservation_id}</a>` : ""}</div></div>
+      <div class="notice-actions">
+        ${n.is_read ? "" : html`<button class="btn btn-ghost btn-sm" data-read="${n.id}">Mark read</button>`}
+        <button class="icon-btn" data-del="${n.id}" aria-label="Delete notification" title="Delete">${icon("x", "icon icon-sm")}</button>
+      </div></div>`));
+    render($("#more"), items.length < total ? html`<button class="btn btn-secondary btn-sm" id="load-more">Show more</button>` : "");
+    $("#load-more")?.addEventListener("click", () => { page += 1; load(true); });
+    $$("[data-read]").forEach((b) => b.onclick = async () => {
+      try { await api.post(`/me/notifications/${b.dataset.read}/read`); load(); } catch (err) { toastError(err); }
+    });
+    $$("[data-del]").forEach((b) => b.onclick = async () => {
+      try { await api.del(`/me/notifications/${b.dataset.del}`); toast("Notification deleted."); load(); } catch (err) { toastError(err); }
+    });
+  }
+
+  async function load(append = false) {
+    if (!append) page = 1;
+    try {
+      const res = await api.get("/me/notifications", { page, per_page: 20, unread_only: filter === "unread" ? 1 : "" });
+      items = append ? items.concat(res.items) : res.items;
+      total = res.total;
+      draw(res.unread_count);
+    } catch (err) {
+      render($("#list"), emptyState({ iconName: "triangle-alert", title: "Notifications are unavailable right now", text: err.message }));
+    }
+  }
+
+  $$("[data-f]").forEach((b) => b.onclick = () => {
+    filter = b.dataset.f;
+    $$("[data-f]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    load();
+  });
+  $("#read-all").onclick = async () => {
+    try { const r = await api.post("/me/notifications/read-all"); toast(r.updated ? `${r.updated} marked as read.` : "Nothing unread."); load(); }
+    catch (err) { toastError(err); }
+  };
+  load();
+</script>
+</body>
+</html>

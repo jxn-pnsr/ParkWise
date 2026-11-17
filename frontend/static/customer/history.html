@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parking history – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Date</th><th>Vehicle</th><th>Bay</th><th>In</th><th>Out</th><th>Time parked</th><th class="num">Fee</th></tr></thead>
+      <tbody id="rows"></tbody></table></div>
+    <div id="more" class="mt-2" style="text-align:center"></div>
+  </section>
+</main>
+<script type="module">
+  // Parking_Sessions live in MongoDB (filled from MySQL by the outbox worker).
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, emptyState, skeletonRows } from "/js/ui.js";
+  import { fmtDate, fmtTime, fmtDuration, fmtMoney } from "/js/format.js";
+
+  await mountShell({ role: "Customer", active: "history" });
+  pageHeader($("#head"), { title: "Parking history", subtitle: "Every visit, with check-in and check-out times and what it cost." });
+
+  let page = 1, items = [], total = 0;
+
+  function draw() {
+    if (!items.length) {
+      render($("#rows"), html`<tr><td colspan="7">${emptyState({ iconName: "clock", title: "No visits yet", text: "Finished visits appear here after check-out." })}</td></tr>`);
+      return;
+    }
+    render($("#rows"), items.map((s) => html`<tr>
+      <td><b>${fmtDate(s.check_in_at)}</b></td>
+      <td>${s.plate_number}</td>
+      <td>${s.slot_code}<span class="cell-sub">${s.lot_name}</span></td>
+      <td>${fmtTime(s.check_in_at)}</td>
+      <td>${s.check_out_at ? fmtTime(s.check_out_at) : html`<span class="badge tone-ok">Parked</span>`}</td>
+      <td>${s.duration_minutes != null ? fmtDuration(s.duration_minutes) : "–"}${s.is_overstay ? html`<span class="cell-sub">overstay</span>` : ""}</td>
+      <td class="num">${s.fees ? html`${fmtMoney(s.fees.total, 2)}${s.fees.overstay ? html`<span class="cell-sub">incl. ${fmtMoney(s.fees.overstay)} overstay</span>` : ""}` : "–"}</td></tr>`));
+    render($("#more"), items.length < total ? html`<button class="btn btn-secondary btn-sm" id="load-more">Show more</button>` : "");
+    $("#load-more")?.addEventListener("click", () => { page += 1; load(true); });
+  }
+
+  async function load(append = false) {
+    if (!append) render($("#rows"), skeletonRows(3, 7));
+    try {
+      const res = await api.get("/me/sessions", { page, per_page: 20 });
+      items = append ? items.concat(res.items) : res.items;
+      total = res.total;
+      draw();
+    } catch (err) {
+      // MongoDB can be down: bookings still work, only history is unavailable
+      render($("#rows"), html`<tr><td colspan="7">${emptyState({ iconName: "triangle-alert", title: "History is unavailable right now", text: err.message })}</td></tr>`);
+    }
+  }
+  load();
+</script>
+</body>
+</html>
