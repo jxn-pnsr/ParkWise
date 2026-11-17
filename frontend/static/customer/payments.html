@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payments – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <div id="due"></div>
+  <section class="panel">
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Visit</th><th>Bay</th><th class="num">Parking</th><th class="num">Overstay</th><th class="num">Total</th><th>Status</th><th class="actions"><span class="sr-only">Action</span></th></tr></thead>
+      <tbody id="rows"></tbody></table></div>
+  </section>
+</main>
+<script type="module">
+  // Simulated payment (spec 8.5): no bank is contacted. The QR image is made by our own server.
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, $$, toast, toastError, setBusy, emptyState, paymentBadge, skeletonRows } from "/js/ui.js";
+  import { fmtDate, fmtTime, fmtMoney, fmtDateTime, PAYMENT_METHOD } from "/js/format.js";
+
+  await mountShell({ role: "Customer", active: "payments" });
+  pageHeader($("#head"), { title: "Payments", subtitle: "Pay for your visits after you check out. Cash or QR, no card details needed." });
+
+  let items = [];
+
+  function draw(res) {
+    render($("#due"), res.unpaid_total > 0 ? html`<div class="alert alert-warn" style="margin-bottom:16px">${icon("wallet")}
+      <span>You have <b>${fmtMoney(res.unpaid_total, 2)}</b> to pay.</span></div>` : "");
+    render($("#rows"), items.length ? items.map((p) => html`<tr>
+      <td><b>${fmtDate(p.reservation.checked_out_at || p.created_at)}</b><span class="cell-sub">${p.reservation.plate_number} · ${fmtTime(p.reservation.checked_in_at)}–${fmtTime(p.reservation.checked_out_at)}</span></td>
+      <td>${p.reservation.slot_code}<span class="cell-sub">${p.reservation.lot_name}</span></td>
+      <td class="num">${fmtMoney(p.base_fee, 2)}</td>
+      <td class="num">${Number(p.overstay_fee) ? fmtMoney(p.overstay_fee, 2) : "–"}</td>
+      <td class="num"><b>${fmtMoney(p.total_amount, 2)}</b></td>
+      <td>${paymentBadge(p.status)}${p.paid_at ? html`<span class="cell-sub">${PAYMENT_METHOD[p.method] || p.method} · ${fmtDateTime(p.paid_at)}</span>` : ""}</td>
+      <td class="actions">${p.status === "Paid" ? html`<button class="btn btn-ghost btn-sm" data-receipt="${p.payment_id}">Receipt</button>`
+        : html`<button class="btn btn-primary btn-sm" data-pay="${p.payment_id}">Pay now</button>`}</td></tr>`)
+      : html`<tr><td colspan="7">${emptyState({ iconName: "credit-card", title: "No payments yet", text: "A payment appears here after staff check you out." })}</td></tr>`);
+    $$("[data-pay]").forEach((b) => b.onclick = () => payDialog(items.find((p) => String(p.payment_id) === b.dataset.pay)));
+    $$("[data-receipt]").forEach((b) => b.onclick = () => receipt(items.find((p) => String(p.payment_id) === b.dataset.receipt)));
+  }
+
+  async function load() {
+    render($("#rows"), skeletonRows(2, 7));
+    try { const res = await api.get("/me/payments"); items = res.items; draw(res); } catch (err) { toastError(err); }
+  }
+
+  function payDialog(p) {
+    const dlg = document.createElement("dialog");
+    dlg.className = "dialog wide";
+    let method = "QR";
+    const body = () => html`<div class="dialog-body">
+        <h3>Pay ${fmtMoney(p.total_amount, 2)}</h3>
+        <p>Bay ${p.reservation.slot_code} · ${p.reservation.plate_number} · ${fmtDate(p.reservation.checked_out_at)}</p>
+        <div class="segmented mt-2" role="group" aria-label="Payment method">
+          <button type="button" data-m="QR" aria-pressed="${method === "QR"}">QR code</button>
+          <button type="button" data-m="Cash" aria-pressed="${method === "Cash"}">Cash</button>
+        </div>
+        ${method === "QR" ? html`<div class="qr-box mt-2"><img src="/api/payments/${p.payment_id}/qr" alt="QR code to pay ${fmtMoney(p.total_amount)}"></div>
+          <p class="hint mt-1">Demo QR made by ParkWise itself. No real bank is involved.</p>`
+          : html`<p class="hint mt-2">Pay the cashier at the exit, then press the button below.</p>`}
+      </div>
+      <div class="dialog-actions"><button class="btn btn-secondary" value="cancel">Cancel</button>
+        <button class="btn btn-primary" value="ok">${method === "QR" ? "I have paid" : "Paid in cash"}</button></div>`;
+    const draw = () => {
+      render(dlg, body());
+      dlg.querySelectorAll("[data-m]").forEach((b) => b.onclick = () => { method = b.dataset.m; draw(); });
+      dlg.querySelector("[value=cancel]").onclick = () => { dlg.close(); dlg.remove(); };
+      dlg.querySelector("[value=ok]").onclick = async (e) => {
+        setBusy(e.currentTarget, true);
+        try {
+          await api.post(`/payments/${p.payment_id}/pay`, { method });
+          dlg.close(); dlg.remove();
+          toast(`Paid ${fmtMoney(p.total_amount, 2)}. Thank you!`);
+          load();
+        } catch (err) { toastError(err); setBusy(e.currentTarget, false); }
+      };
+    };
+    document.body.append(dlg);
+    draw();
+    dlg.showModal();
+  }
+
+  function receipt(p) {
+    const dlg = document.createElement("dialog");
+    dlg.className = "dialog wide";
+    render(dlg, html`<div class="dialog-body"><h3>Receipt #${p.payment_id}</h3>
+      <div class="receipt mt-2"><div class="kv">
+        <div><span class="k">Customer</span><span class="v">${p.customer.full_name}</span></div>
+        <div><span class="k">Vehicle</span><span class="v">${p.reservation.plate_number}</span></div>
+        <div><span class="k">Bay</span><span class="v">${p.reservation.slot_code} · ${p.reservation.lot_name}</span></div>
+        <div><span class="k">Parked</span><span class="v">${fmtDateTime(p.reservation.checked_in_at)} – ${fmtTime(p.reservation.checked_out_at)}</span></div>
+        <div><span class="k">Parking</span><span class="v">${fmtMoney(p.base_fee, 2)}</span></div>
+        <div><span class="k">Overstay</span><span class="v">${fmtMoney(p.overstay_fee, 2)}</span></div>
+        <div><span class="k">Paid by</span><span class="v">${PAYMENT_METHOD[p.method] || p.method} · ${fmtDateTime(p.paid_at)}</span></div>
+      </div><div class="total-row"><span>Total</span><span class="amount">${fmtMoney(p.total_amount, 2)}</span></div></div></div>
+      <div class="dialog-actions"><button class="btn btn-secondary" value="print">${icon("download")} Print</button><button class="btn btn-primary" value="ok">Close</button></div>`);
+    document.body.append(dlg);
+    dlg.querySelector("[value=ok]").onclick = () => { dlg.close(); dlg.remove(); };
+    dlg.querySelector("[value=print]").onclick = () => window.print();
+    dlg.showModal();
+  }
+
+  load();
+</script>
+</body>
+</html>
