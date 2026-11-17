@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Entries and exits – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="panel-head">
+      <div class="flex"><input class="input" type="date" id="day" aria-label="Day" style="width:190px"><span class="muted small" id="totals"></span></div>
+      <button type="button" class="btn btn-outline" id="refresh"></button>
+    </div>
+    <div class="table-wrap"><table class="table">
+      <thead><tr><th>Time</th><th>Movement</th><th>Plate</th><th>Customer</th><th>Bay</th><th>Booked</th><th class="num">Fee</th></tr></thead>
+      <tbody id="rows"></tbody></table></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, toastError, skeletonRows, emptyState } from "/js/ui.js";
+  import { fmtTime, fmtRange, fmtMoney, bkkDateString } from "/js/format.js";
+
+  await mountShell({ role: "Staff", active: "movements" });
+  pageHeader($("#head"), { title: "Entries and exits", subtitle: "Every check-in and check-out on the chosen day, newest first." });
+  render($("#refresh"), html`${icon("refresh-cw", "icon icon-sm")} Refresh`);
+  const day = $("#day");
+  day.value = day.max = bkkDateString();
+
+  async function load() {
+    render($("#rows"), skeletonRows(3, 7));
+    let d;
+    try { d = await api.get("/staff/movements", { date: day.value }); } catch (err) { toastError(err); return; }
+    $("#totals").textContent = `${d.count_in} in · ${d.count_out} out`;
+    render($("#rows"), d.items.length ? d.items.map((m) => {
+      const r = m.reservation;
+      return html`<tr>
+        <td><b>${fmtTime(m.at)}</b></td>
+        <td>${m.kind === "in" ? html`<span class="badge tone-ok">Checked in</span>` : html`<span class="badge tone-info">Checked out</span>`}</td>
+        <td><b>${r.vehicle.plate_number}</b><span class="cell-sub">${r.vehicle.province}</span></td>
+        <td>${r.customer.full_name}</td>
+        <td>${r.slot.slot_code}<span class="cell-sub">${r.slot.lot_name}</span></td>
+        <td>${fmtRange(r.start_time, r.end_time)}</td>
+        <td class="num">${m.kind === "out" && r.payment ? fmtMoney(r.payment.total_amount, 2) : "–"}</td></tr>`;
+    }) : html`<tr><td colspan="7">${emptyState({ iconName: "car", title: "No entries or exits on this day" })}</td></tr>`);
+  }
+  day.onchange = load;
+  $("#refresh").onclick = load;
+  load();
+</script>
+</body>
+</html>
