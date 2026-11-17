@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Current parking – ParkWise</title>
+  <script src="/js/theme-init.js"></script>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <div id="parked" class="stack-gap"></div>
+  <section class="panel mt-3" aria-labelledby="next-title">
+    <div class="panel-head"><h2 id="next-title">Coming up</h2><a class="btn btn-outline" href="/customer/reservations.html">All reservations</a></div>
+    <div id="upcoming"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
+  import { html, icon, render, $, toastError, emptyState, reservationBadge } from "/js/ui.js";
+  import { fmtRange, fmtTime, fmtMoney, fmtDuration, fmtPlate } from "/js/format.js";
+
+  await mountShell({ role: "Customer", active: "parking" });
+  pageHeader($("#head"), { title: "Current parking", subtitle: "Where your car is, how long is left, and what you would pay if you left now." });
+
+  let data, skew = 0;
+  const now = () => Date.now() + skew;
+
+  function left(r) {
+    const ms = new Date(r.end_time).getTime() - now();
+    const mins = Math.round(Math.abs(ms) / 60000);
+    return ms >= 0 ? { text: fmtDuration(mins), late: false } : { text: fmtDuration(mins), late: true };
+  }
+
+  function drawParked() {
+    if (!data.parked.length) {
+      render($("#parked"), html`<section class="panel">${emptyState({ iconName: "car", title: "Your car is not parked with us right now",
+        text: "After staff check you in at the gate, your bay and timer appear here.",
+        action: html`<a class="btn btn-primary btn-sm" href="/customer/lots.html">${icon("plus")} Book a bay</a>` })}</section>`);
+      return;
+    }
+    render($("#parked"), data.parked.map((r) => {
+      const l = left(r), f = r.fee_if_leave_now;
+      return html`<section class="panel">
+        <div class="parked-card">
+          <div class="parked-bay">${r.slot.slot_code}<small>${r.slot.lot_name}</small></div>
+          <div>
+            <div class="flex wrap" style="gap:10px">${reservationBadge(r.status, r.display_label)}<span class="muted">${fmtPlate(r.vehicle)}</span></div>
+            <div class="big-timer mt-1" data-left="${r.reservation_id}">${l.late ? `${l.text} over` : `${l.text} left`}</div>
+            <div class="muted">Booked ${fmtRange(r.start_time, r.end_time)} · checked in at ${fmtTime(r.checked_in_at)}</div>
+          </div>
+        </div>
+        ${l.late ? html`<div class="alert alert-error mt-2">${icon("triangle-alert")}<span>Your booked time has ended. Overstay fees apply after a 15-minute grace period. Please drive to the exit.</span></div>` : ""}
+        <div class="kv mt-2">
+          <div><span class="k">If you leave now: parking (${f.billed_hours} h)</span><span class="v">${fmtMoney(f.base_fee, 2)}</span></div>
+          <div><span class="k">Overstay${f.overstay_hours ? ` (${f.overstay_hours} h)` : ""}</span><span class="v">${fmtMoney(f.overstay_fee, 2)}</span></div>
+        </div>
+        <div class="total-row"><span>Estimated total</span><span class="amount">${fmtMoney(f.total_amount, 2)}</span></div>
+        <p class="hint mt-1">Staff check you out at the exit. You then pay in Payments (cash or QR).</p>
+      </section>`;
+    }));
+  }
+
+  function drawUpcoming() {
+    render($("#upcoming"), data.upcoming.length ? html`<div class="table-wrap"><table class="table">
+      <thead><tr><th>Bay</th><th>When</th><th>Vehicle</th><th>Status</th></tr></thead>
+      <tbody>${data.upcoming.map((r) => html`<tr><td><b>${r.slot.slot_code}</b><span class="cell-sub">${r.slot.lot_name}</span></td>
+        <td>${fmtRange(r.start_time, r.end_time)}</td><td>${fmtPlate(r.vehicle)}</td><td>${reservationBadge(r.status, r.display_label)}</td></tr>`)}</tbody></table></div>`
+      : emptyState({ iconName: "calendar", title: "Nothing booked yet" }));
+  }
+
+  async function load() {
+    try { data = await api.get("/me/parking"); } catch (err) { toastError(err); return; }
+    const srv = data.parked[0]?.server_time || data.upcoming[0]?.server_time;
+    if (srv) skew = new Date(srv).getTime() - Date.now();
+    drawParked();
+    drawUpcoming();
+  }
+  await load();
+  setInterval(() => {
+    for (const r of data?.parked || []) {
+      const el = document.querySelector(`[data-left="${r.reservation_id}"]`);
+      if (el) { const l = left(r); el.textContent = l.late ? `${l.text} over` : `${l.text} left`; }
+    }
+  }, 30000);
+  setInterval(load, 120000);
+</script>
+</body>
+</html>
