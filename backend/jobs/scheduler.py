@@ -1,11 +1,12 @@
-"""Background jobs inside the Flask process (APScheduler, not an outside service).
+"""Background jobs using APScheduler within the Flask process.
 
-    every 30 s   expire holds, mark no-shows          (spec 7.3 layer 1)
-    every 5 s    send Pending outbox events to MongoDB  (spec 10.2)
-    every 60 s   ending-soon warnings, overstay detection (spec 8.4)
+    every 30 s   expire holds and mark no-shows
+    every 5 s    sync Pending outbox events to MongoDB
+    every 60 s   send ending-soon warnings and detect overstays
 
-Each job opens its own MySQL connection and transaction, and never lets an
-error stop the scheduler. Turn it off with SCHEDULER_ENABLED=0 (tests do).
+Each job uses its own MySQL connection and transaction.
+Errors are logged without stopping the scheduler.
+Disable with SCHEDULER_ENABLED=0 (used in tests).
 """
 import logging
 import os
@@ -43,7 +44,7 @@ def _overstay():
 
 
 def run_all_now():
-    """Run every job once (admin 'Run scheduler now' button, demo)."""
+    """Run all jobs once for the admin demo button."""
     from services import expiry, mongo_sync, overstay
     return {**expiry.run_all(), "warned": overstay.send_end_warnings(),
             "overstay": overstay.detect_overstays(), "outbox": mongo_sync.process_pending()}
@@ -53,7 +54,7 @@ def start(app):
     global _scheduler
     if _scheduler or not app.config.get("SCHEDULER_ENABLED"):
         return None
-    # With the debug reloader Flask starts twice; only the child process runs jobs.
+    # Prevent duplicate jobs in the Flask debug reloader.
     if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
         return None
     _scheduler = BackgroundScheduler(timezone="UTC", job_defaults={"coalesce": True, "max_instances": 1})
