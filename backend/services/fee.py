@@ -1,14 +1,17 @@
-"""Parking fee calculation (spec 8.3).
+"""Parking fee (spec 8.3). Pure functions: no database, easy to test.
 
-Base fee:
-    Before end: actual hours rounded up, at least 1 hour
-    After end: booked hours, no refund
+base fee
+    leave before end_time : ceil(actual_out - actual_in) hours, at least 1, x RATE
+    leave after end_time  : the booked hours x RATE (no refund for unused time)
+overstay fee
+    late = actual_out - end_time - GRACE (15 min). If late <= 0 -> 0.
+    late hours = ceil(late / 60): 1st hour TIER1 (40), every next hour TIER2 (60)
+total = base + overstay
 
-Overstay:
-    After 15-minute grace period
-    First hour: TIER1, next hours: TIER2
-
-Total = base + overstay
+Examples (spec):
+    10:00-12:00, out 13:30            -> base 40, overstay 100, total 140
+    10:00-12:00, out 12:10            -> base 40, overstay 0,   total 40
+    10:00-14:00, in 10:05, out 11:20  -> base 40 (2 h used),     total 40
 """
 import math
 from datetime import timedelta
@@ -20,7 +23,10 @@ def _ceil_hours(delta):
 
 
 def calculate_fee(start_time, end_time, duration_hours, actual_in, actual_out, rules):
-    """Calculate parking fees and usage details."""
+    """Return {base_fee, overstay_fee, total_amount, billed_hours, overstay_hours, is_overstay, minutes_parked}.
+
+    rules: dict with RATE_PER_HOUR, OVERSTAY_GRACE_MINUTES, OVERSTAY_TIER1_RATE, OVERSTAY_TIER2_RATE
+    """
     if actual_in is None or actual_out is None:
         raise ValueError("check-in and check-out times are required")
     if actual_out < actual_in:
@@ -52,5 +58,5 @@ def calculate_fee(start_time, end_time, duration_hours, actual_in, actual_out, r
 
 
 def estimate_booking(duration_hours, rules):
-    """Estimate the booking fee."""
+    """Price shown before booking: booked hours x rate."""
     return duration_hours * rules["RATE_PER_HOUR"]

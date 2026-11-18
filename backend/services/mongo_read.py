@@ -1,6 +1,7 @@
-"""MongoDB reads for page settings and unread notifications.
+"""Small reads from MongoDB that pages need every time (theme, unread badge).
 
-Returns defaults if MongoDB is unavailable.
+MongoDB may be down (it is the follower database), so these never raise:
+they fall back to defaults and the page still works.
 """
 import logging
 import os
@@ -12,8 +13,10 @@ from db.mongo import MongoUnavailable, get_mongo
 
 log = logging.getLogger(__name__)
 
-# Skip MongoDB briefly after a real failure to avoid delays on every page.
-# Simulated outages are not cached.
+# When MongoDB is off, every try waits MONGO_TIMEOUT_MS. These reads run on every
+# page (/api/auth/me), so after one real failure we skip MongoDB for a short time
+# instead of making every page wait. Simulated outages (Transaction Demo) raise
+# MongoUnavailable instantly and are not cached.
 SKIP_SECONDS = float(os.getenv("MONGO_SKIP_SECONDS", "30"))
 _skip_until = 0.0
 
@@ -31,7 +34,6 @@ def _mark_down(e):
 def reset_skip():
     global _skip_until
     _skip_until = 0.0
-
 
 DEFAULT_PREFERENCES = {
     "theme": "light",
@@ -54,6 +56,25 @@ def preferences(user_id):
     out["notifications"] = {**DEFAULT_PREFERENCES["notifications"], **(out.get("notifications") or {})}
     out.pop("userId", None)
     return out
+
+
+def require_mongo():
+    """MongoDB handle for pages that only live in MongoDB (history, notifications).
+    Raises 503 with a clear message instead of crashing when MongoDB is down."""
+    from core.errors import ServiceUnavailable
+    try:
+        if _skipping():
+            raise MongoUnavailable("skipped: MongoDB was unreachable a moment ago")
+        db = get_mongo()
+        db.command("ping")
+        return db
+    except PyMongoError as e:
+        _mark_down(e)
+        raise ServiceUnavailable("MONGO_DOWN", "History and notifications are temporarily unavailable. "
+                                               "Bookings still work; please try again in a moment.")
+    except MongoUnavailable:
+        raise ServiceUnavailable("MONGO_DOWN", "History and notifications are temporarily unavailable. "
+                                               "Bookings still work; please try again in a moment.")
 
 
 def unread_notifications(user_id):

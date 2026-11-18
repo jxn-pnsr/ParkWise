@@ -1,13 +1,13 @@
-"""Bay colours based on reservations in a selected time window.
+"""Bay colours for a time window (spec 6.2).
 
-slot_status in MySQL only stores Active / Maintenance.
-Display colours are determined by bookings in the selected window:
+slot_status in MySQL is only Active / Maintenance. The colour a user sees is
+worked out from Reservations for the window they picked (default: now, 1 hour):
 
     Maintenance (grey)  slot_status = Maintenance
-    Occupied (blue)     A car is parked during the window
-    Reserved (red)      A Confirmed booking overlaps the window
-    Held (yellow)       An unexpired Held booking overlaps the window
-    Available (green)   No booking overlaps the window
+    Occupied    (blue)  a car is parked (In Use) during the window
+    Reserved    (red)   a Confirmed booking overlaps the window
+    Held        (yellow) an unexpired Held booking overlaps the window
+    Available   (green) none of the above
 """
 from datetime import timedelta
 
@@ -23,7 +23,7 @@ COLOURS = ("Available", "Held", "Reserved", "Occupied", "Maintenance")
 
 
 def resolve_window(start=None, duration_hours=None, now=None):
-    """Return the lookup window, starting now if needed."""
+    """(start, end) for a lookup. No start = now. Start is never in the past."""
     now = now or now_utc()
     hours = duration_hours or 1
     if hours < cfg("MIN_DURATION_HOURS") or hours > cfg("MAX_DURATION_HOURS"):
@@ -34,7 +34,7 @@ def resolve_window(start=None, duration_hours=None, now=None):
 
 
 def slot_states(lot_id=None, start=None, end=None, now=None, with_details=False):
-    """Get bay statuses for the window. Staff/admin can also see booking details."""
+    """List of bays with display_status for the window. with_details adds plate/reservation (staff/admin)."""
     now = now or now_utc()
     params = time_params(start, end, now)
     where, args = "s.is_deleted = 0", dict(params)
@@ -113,7 +113,7 @@ def lot_detail(lot_id, start=None, end=None, now=None, with_details=False):
 
 
 def available_slot_ids(cur, lot_id, start, end, now, exclude_slot_id=None, limit=5):
-    """Find free bays in the same lot and time window."""
+    """Free bays in the same lot for the same window (suggested when a bay is taken)."""
     args = {**time_params(start, end, now), "lot_id": lot_id, "ex": exclude_slot_id or 0, "lim": limit}
     cur.execute(
         f"SELECT s.slot_id, s.slot_code, s.slot_type FROM Parking_Slots s "

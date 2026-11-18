@@ -1,21 +1,22 @@
-"""Shared SQL for bookings, availability, and reservation lists.
+"""SQL pieces shared by booking, availability and lists, plus row -> JSON helpers.
 
-A bay is blocked by an active hold, a Confirmed booking before its
-no-show cutoff, or an In Use reservation. Expired holds and no-shows
-are ignored even if the scheduler is late.
+"Occupies the bay" (spec 6.3) is decided here, with lazy expiry built in
+(spec 7.3 layer 2): even if the scheduler is late, an expired hold or a
+Confirmed booking past its no-show time never blocks anybody.
 """
 from datetime import timedelta
 
 from core.settings import cfg
 from core.timeutil import now_utc
 
-# Reservations that currently block a bay. Uses %(now)s and %(noshow_cut)s.
+# A reservation that blocks its bay right now. Uses %(now)s and %(noshow_cut)s.
 OCCUPYING_SQL = """(
       (r.status = 'Held' AND r.hold_expires_at > %(now)s)
    OR (r.status = 'Confirmed' AND r.start_time > %(noshow_cut)s)
    OR r.status = 'In Use')"""
 
-# Overlap with [%(start)s, %(end)s). Overstays keep the bay until checkout.
+# Time overlap with [%(start)s, %(end)s). A car still parked after its end time
+# (overstay) keeps the bay until it leaves.
 OVERLAP_SQL = """(r.start_time < %(end)s
    AND (CASE WHEN r.status = 'In Use' THEN GREATEST(r.end_time, %(now)s + INTERVAL 1 MINUTE)
              ELSE r.end_time END) > %(start)s)"""
@@ -46,7 +47,7 @@ LEFT JOIN Payments p     ON p.reservation_id = r.reservation_id AND p.is_deleted
 
 
 def effective_status(row, now=None):
-    """Return the current status before the scheduler updates it."""
+    """What the status really is right now, before the scheduler has caught up."""
     now = now or now_utc()
     status = row["status"]
     if status == "Held" and row["hold_expires_at"] and row["hold_expires_at"] <= now:
@@ -57,7 +58,7 @@ def effective_status(row, now=None):
 
 
 def display_label(row, now=None):
-    """Return extra list labels not stored in the database."""
+    """Extra badge for lists: awaiting_checkin / overstay (not stored in DB)."""
     now = now or now_utc()
     status = effective_status(row, now)
     if status == "Confirmed":

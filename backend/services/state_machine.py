@@ -3,9 +3,9 @@
     Held      -> Confirmed / Expired / Cancelled
     Confirmed -> In Use / Cancelled / No-show
     In Use    -> Completed
-    Final: Completed, Cancelled, Expired, No-show.
+    Completed, Cancelled, Expired, No-show are final.
 
-Invalid changes are rejected unless overridden by an Admin.
+Anything else is refused, except an Admin edit (which is logged).
 """
 from core.errors import Conflict
 
@@ -21,7 +21,7 @@ ALLOWED = {
 STATUSES = tuple(ALLOWED)
 FINAL = {s for s, nxt in ALLOWED.items() if not nxt}
 
-# Statuses that occupy a bay.
+# Statuses that keep a bay busy (used for overlap checks)
 OCCUPYING = ("Held", "Confirmed", "In Use")
 
 

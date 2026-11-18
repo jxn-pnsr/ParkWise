@@ -1,9 +1,10 @@
-"""Customer vehicles: add, update, set default, and delete.
+"""Customer vehicles: add, edit, set main vehicle, soft delete (spec 4, 7.2 rule 12).
 
-* Active plate and province combinations must be unique.
-* Each customer can have one default vehicle.
-* The first vehicle becomes the default automatically.
-* Vehicles with active or upcoming reservations cannot be deleted.
+* Plate + province must be unique among vehicles that are not deleted
+  (database column active_plate_key).
+* One main (default) vehicle per customer (column default_owner_key).
+* The first vehicle a customer adds becomes the main one automatically.
+* A vehicle with an active or upcoming booking cannot be deleted.
 """
 import re
 
@@ -19,7 +20,7 @@ COLUMNS = "vehicle_id, user_id, plate_number, province, is_default, is_deleted, 
 
 
 def normalise_plate(text):
-    """Clean the plate and keep Thai letters unchanged."""
+    """'1ab  1234' -> '1AB 1234' (Thai letters are left as typed)."""
     return re.sub(r"\s+", " ", (text or "").strip()).upper()
 
 
@@ -108,7 +109,7 @@ def set_default(user_id, vehicle_id):
 
 
 def delete(user_id, vehicle_id, admin=False):
-    """Soft delete the vehicle and keep its reservation history."""
+    """Soft delete: is_deleted = 1 keeps old reservations pointing at a real row."""
     now = now_utc()
     with transaction() as cur:
         if admin:
@@ -126,8 +127,7 @@ def delete(user_id, vehicle_id, admin=False):
                            "This vehicle has an active or upcoming reservation. Cancel or finish it first.")
         cur.execute("UPDATE Customer_Vehicles SET is_deleted = 1, is_default = 0, updated_at = %s "
                     "WHERE vehicle_id = %s", (now, vehicle_id))
-        if v["is_default"]:
-            # Make the oldest remaining vehicle the default.
+        if v["is_default"]:  # hand the main-vehicle flag to the oldest remaining car
             cur.execute("SELECT vehicle_id FROM Customer_Vehicles WHERE user_id = %s AND is_deleted = 0 "
                         "ORDER BY vehicle_id LIMIT 1", (v["user_id"],))
             nxt = cur.fetchone()

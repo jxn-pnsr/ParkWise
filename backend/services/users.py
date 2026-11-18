@@ -1,7 +1,8 @@
-"""Register, login, profile and password management.
+"""Register, log in (with lockout), profile, password.
 
-Lockout (security rule 7): Too many failed logins lock the account for
-LOGIN_LOCK_MINUTES. Login events are saved through the outbox.
+Lockout (security rule 7): LOGIN_MAX_FAILED wrong passwords in a row lock the
+account for LOGIN_LOCK_MINUTES. Every login and failed login is logged
+through the outbox (user.login / user.login_failed / user.locked).
 """
 import pymysql
 
@@ -20,7 +21,7 @@ def public_user(row):
 
 
 def register(email, password, full_name, phone):
-    """Create a Customer account. The role is not taken from the request."""
+    """Always creates a Customer. The role is never taken from the request (security rule 1)."""
     now = now_utc()
     try:
         with transaction() as cur:
@@ -44,7 +45,7 @@ def _ip():
 
 
 def authenticate(email, password):
-    """Return the user row or raise an error. Save failed attempts before raising."""
+    """Return the user row, or raise. Failed attempts are saved even though we raise."""
     now = now_utc()
     outcome, payload = None, None
     with transaction() as cur:
@@ -88,7 +89,7 @@ def authenticate(email, password):
             write_event(cur, "user.login", "user", u["user_id"], metadata={}, who=anon)
             outcome = "ok"
 
-    # Raise after commit so failed attempts are saved.
+    # raise only after COMMIT, so the failed-attempt counter is saved
     if outcome == "locked":
         raise Locked("ACCOUNT_LOCKED",
                      f"Too many failed attempts. Try again after {cfg('LOGIN_LOCK_MINUTES')} minutes.",

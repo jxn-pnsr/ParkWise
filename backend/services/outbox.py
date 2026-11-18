@@ -1,13 +1,16 @@
-"""MySQL outbox for MongoDB sync (spec 10.2).
+"""Integration_Outbox: the MySQL -> MongoDB sync queue (spec 10.2).
 
-Events are saved in the same transaction and synced later by the worker.
+Every SQL transaction that changes something important calls write_event()
+with the SAME cursor, so the event is saved only if the transaction commits.
+The worker (phase 2) later reads Pending events and writes them to MongoDB.
 
-Payload:
-    entity_type, entity_id   changed record
-    actor_user_id, role, ip  who made the change
-    metadata                 extra details
-    target_user_id, notify   notification details
-    session                  parking session data
+Payload format (must match database/seed_mongo.py apply_event):
+    entity_type, entity_id            what changed
+    actor_user_id, actor_role, ip_address
+    metadata                          free-form details
+    target_user_id + notify           -> a Notification for that user
+        notify = {type, title, message}
+    session                           -> Parking_Sessions (check-in/out)
 """
 import json
 import uuid
