@@ -1,4 +1,5 @@
-"""Customer data. Uses the session user, never a request user_id."""
+"""/api/me/*  the logged-in customer's own data. Never takes a user_id from the
+request: everything is filtered by the session user (security rule 2)."""
 from datetime import datetime, timedelta
 
 from flask import Blueprint, request
@@ -9,13 +10,15 @@ from core.timeutil import BKK, now_utc, to_naive_utc
 from core.validate import Input, request_json
 from db.mysql import fetch_all, fetch_one, fetch_value
 from services import availability, booking, expiry, users, vehicles
+from core.settings import all_config
+from services.fee import calculate_fee
 from services.queries import OCCUPYING_SQL, RESERVATION_SELECT, serialize_reservation, time_params
 
 bp = Blueprint("me", __name__, url_prefix="/api/me")
 customer = login_required("Customer")
 
 
-# profile
+# ---- profile ------------------------------------------------------------------
 
 @bp.get("/profile")
 @customer
@@ -47,7 +50,7 @@ def change_password():
     return ok(None)
 
 
-# vehicles
+# ---- vehicles -------------------------------------------------------------------
 
 @bp.get("/vehicles")
 @customer
@@ -89,12 +92,12 @@ def delete_vehicle(vehicle_id):
     return ok(None)
 
 
-# reservations
+# ---- reservations ---------------------------------------------------------------
 
 @bp.get("/reservations")
 @customer
 def my_reservations():
-    """Active, past, or all reservations with optional status and pagination."""
+    """?scope=active (default) | past | all  &status=Confirmed  &page=&per_page="""
     expiry.run_all()
     uid = current_user()["user_id"]
     page, per_page, offset = get_pagination()
@@ -128,7 +131,7 @@ def my_reservation(reservation_id):
 @bp.get("/parking")
 @customer
 def my_parking():
-    """Current parking and upcoming reservations."""
+    """Where is my car now, and what is next."""
     expiry.run_all()
     uid = current_user()["user_id"]
     now = now_utc()
@@ -136,14 +139,20 @@ def my_parking():
                        (uid,))
     upcoming = fetch_all(f"{RESERVATION_SELECT} WHERE r.user_id = %(uid)s AND r.status IN ('Held','Confirmed') "
                          f"AND {OCCUPYING_SQL} ORDER BY r.start_time LIMIT 3", {**time_params(now), "uid": uid})
-    return ok({"parked": [serialize_reservation(r, now) for r in parked],
+    def with_fee(r):
+        data = serialize_reservation(r, now)
+        # what the customer would pay if they drove out right now
+        data["fee_if_leave_now"] = calculate_fee(r["start_time"], r["end_time"], r["duration_hours"],
+                                                 r["checked_in_at"], max(now, r["checked_in_at"]), all_config())
+        return data
+    return ok({"parked": [with_fee(r) for r in parked],
                "upcoming": [{**serialize_reservation(r, now), **booking.customer_actions(r, now)} for r in upcoming]})
 
 
-# dashboard
+# ---- dashboard ------------------------------------------------------------------
 
 def _month_bounds_utc(now):
-    """Current and previous month start times in Bangkok, as naive UTC."""
+    """Start of this month and last month in Bangkok time, as naive UTC."""
     local = now.replace(tzinfo=None) + timedelta(hours=7)
     this_start = datetime(local.year, local.month, 1, tzinfo=BKK)
     prev_local = this_start - timedelta(days=1)
@@ -186,3 +195,4 @@ def dashboard():
         "lots": lots,
         "server_time": now,
     })
+
