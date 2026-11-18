@@ -1,8 +1,8 @@
 """Test setup.
 
-Tests run against a SEPARATE database (default parkwise_test) so they never
-change the demo data. It is rebuilt from database/schema.sql + seed.sql:
-once per test session, and again by tests that ask for `fresh_db`.
+Tests use a separate database (default: parkwise_test) to protect demo data.
+The database is rebuilt from schema.sql and seed.sql once per session,
+and again for tests that use `fresh_db`.
 """
 import os
 import sys
@@ -14,20 +14,20 @@ BACKEND = os.path.dirname(HERE)
 DATABASE_DIR = os.path.join(BACKEND, "..", "database")
 sys.path.insert(0, BACKEND)
 
-# Must happen before config is imported (config reads the environment once).
+# Load environment variables before importing config.
 from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv(os.path.join(BACKEND, ".env"))
 TEST_DB = os.getenv("TEST_MYSQL_DB", "parkwise_test")
 os.environ["MYSQL_DB"] = TEST_DB
-os.environ.setdefault("MONGO_SKIP_SECONDS", "0")  # tests: never cache a Mongo outage
+os.environ.setdefault("MONGO_SKIP_SECONDS", "0")  # Disable Mongo outage caching in tests.
 
 from app import create_app  # noqa: E402
 from config import TestConfig  # noqa: E402
 from db import mysql  # noqa: E402
 
 TestConfig.MYSQL_DB = TEST_DB
-PASSWORD = "Passw0rd!"  # every account in seed.sql
+PASSWORD = "Passw0rd!"  # Password used by seed accounts.
 
 
 def _mysql_available():
@@ -61,7 +61,7 @@ def _build_test_db():
 
 @pytest.fixture()
 def fresh_db():
-    """Rebuild the test database before this test (for tests that change seed rows)."""
+    """Rebuild the test database before tests that modify seed data."""
     reset_test_db()
 
 
@@ -76,7 +76,7 @@ def client(app):
 
 
 class ApiClient:
-    """Test client that logs in and sends the CSRF header like the frontend does."""
+    """Test client that handles login and CSRF headers."""
 
     def __init__(self, app):
         self.c = app.test_client()
@@ -113,3 +113,30 @@ def data(r):
     body = r.get_json()
     assert body is not None, r.get_data(as_text=True)
     return body.get("data") if body.get("ok") else body.get("error")
+
+
+@pytest.fixture()
+def mongo(monkeypatch):
+    """Create a seeded in-memory MongoDB for tests.
+
+    All modules that use get_mongo receive the fake database.
+    The simulated outage switch remains available.
+    """
+    import mongomock
+
+    from db import mongo as mongo_mod
+
+    fake = mongomock.MongoClient().parkwise
+
+    def get_fake():
+        if mongo_mod.is_simulated_down():
+            raise mongo_mod.MongoUnavailable("MongoDB is down (simulated)")
+        return fake
+
+    for target in ("db.mongo.get_mongo", "services.mongo_read.get_mongo", "services.mongo_sync.get_mongo"):
+        monkeypatch.setattr(target, get_fake)
+    sys.path.insert(0, DATABASE_DIR)
+    import seed_mongo
+    seed_mongo.seed(fake, seed_mongo.mysql_conn())
+    yield fake
+    mongo_mod.set_simulated_down(False)
