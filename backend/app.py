@@ -1,8 +1,7 @@
 """ParkWise backend entry point.
 
-Run:  python app.py            (or: flask --app app run --debug)
-
-All /api routes return JSON. Other paths serve frontend files from static/.
+Run with `python app.py` or `flask --app app run --debug`.
+API routes return JSON. Other paths serve frontend files from static/.
 """
 import logging
 import os
@@ -19,14 +18,14 @@ from core.responses import ok
 from db import mongo, mysql
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Frontend folder (can be changed with FRONTEND_DIR)
+# Frontend static files (can be overridden with FRONTEND_DIR).
 STATIC_DIR = os.path.abspath(os.getenv(
     "FRONTEND_DIR", os.path.join(BASE_DIR, "..", "frontend", "static")))
 
 
 class ApiJSONProvider(DefaultJSONProvider):
-    """Convert datetime, Decimal, and ObjectId to JSON values."""
-    ensure_ascii = False  # Keep Thai text readable.
+    """Convert dates, decimals, and MongoDB ObjectIds to JSON values."""
+    ensure_ascii = False  # Keep Thai text readable in JSON responses.
     sort_keys = False
 
     @staticmethod
@@ -43,12 +42,16 @@ class ApiJSONProvider(DefaultJSONProvider):
 
 
 def register_blueprints(app):
-    # Phase 1: authentication, customer data, lots, and bookings
+    # Core routes.
     from routes import auth, lots, me, reservations
     for module in (auth, lots, me, reservations):
         app.register_blueprint(module.bp)
-    # Phase 2: staff, payments, notifications, preferences, and sessions
-    # Phase 3: admin
+
+    # Account and staff routes.
+    from routes import account, staff
+    for module in (account, staff):
+        app.register_blueprint(module.bp)
+    # Admin routes.
 
 
 def register_system_routes(app):
@@ -73,7 +76,7 @@ def register_system_routes(app):
         return send_from_directory(STATIC_DIR, "index.html")
 
     @app.get("/favicon.ico")
-    def favicon():  # Browser favicon request
+    def favicon():  # Serve the favicon requested by browsers.
         return send_from_directory(STATIC_DIR, "favicon.svg", mimetype="image/svg+xml")
 
 
@@ -89,11 +92,13 @@ def create_app(config_class=Config):
     mysql.init_app(app)
     mongo.init_app(app)
     register_error_handlers(app)
-    security.init_app(app)   # Check CSRF on data-changing requests.
+    security.init_app(app)   # Check CSRF tokens on data-changing requests.
     register_system_routes(app)
     register_blueprints(app)
 
-    # Start APScheduler here in phase 3.
+    # Start background jobs.
+    from jobs import scheduler
+    scheduler.start(app)
     return app
 
 
