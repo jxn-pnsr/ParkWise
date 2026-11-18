@@ -1,5 +1,9 @@
-"""
-Define API errors and return them as JSON.
+"""Errors the API can return, and the handlers that turn them into JSON.
+
+Services raise these; routes never build error responses by hand.
+
+    raise Conflict("SLOT_TAKEN", "This bay is already booked for that time.")
+    -> 409 {"ok": false, "error": {"code": "SLOT_TAKEN", "message": "..."}}
 """
 import logging
 
@@ -20,8 +24,8 @@ class AppError(Exception):
         super().__init__(message or self.message)
         self.code = code or self.code
         self.message = message or self.message
-        self.fields = fields
-        self.extra = extra
+        self.fields = fields      # {"field": "why"} for form errors
+        self.extra = extra        # any extra data for the frontend (e.g. alternative slots)
 
 
 class ValidationError(AppError):
@@ -49,7 +53,7 @@ class NotFound(AppError):
 
 
 class Conflict(AppError):
-    """Used when an action conflicts with the current state."""
+    """Breaks a business rule or the current state (always pass a specific code)."""
     status = 409
     code = "CONFLICT"
     message = "This action is not allowed right now."
@@ -87,7 +91,7 @@ def register_error_handlers(app):
 
     @app.errorhandler(HTTPException)
     def _http_error(e):
-        # Keep normal HTML errors outside the API.
+        # Pages outside /api (static frontend files) keep Flask's normal HTML errors.
         if not request.path.startswith("/api"):
             return e
         code, message = _HTTP_CODES.get(e.code, ("HTTP_%s" % e.code, e.description or "Something went wrong."))
@@ -95,6 +99,6 @@ def register_error_handlers(app):
 
     @app.errorhandler(Exception)
     def _unexpected(e):
-        # Rollback is handled by the transaction.
+        # Any transaction in progress has already been rolled back by db.mysql.transaction().
         log.exception("Unhandled error on %s %s", request.method, request.path)
         return fail("INTERNAL_ERROR", "Something went wrong on the server. Please try again.", 500)

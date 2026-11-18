@@ -1,9 +1,17 @@
+"""Business rules from the System_Config table (spec section 5).
+
+    from core.settings import cfg
+    hold = cfg("HOLD_MINUTES")          # -> 5 (int)
+
+Values are cached for a few seconds so every request does not hit MySQL.
+When the admin changes a value (phase 3), call invalidate().
+"""
 import threading
 import time
 
 from db.mysql import fetch_all
 
-# Default values for missing settings.
+# Used when a key is missing from the table (fresh or old database).
 DEFAULTS = {
     "HOLD_MINUTES": 5,
     "NOSHOW_GRACE_MINUTES": 30,
@@ -23,7 +31,7 @@ DEFAULTS = {
     "LOGIN_LOCK_MINUTES": 5,
 }
 
-# Settings available to the frontend.
+# Rules the frontend may read (GET /api/config/public)
 PUBLIC_KEYS = (
     "HOLD_MINUTES", "NOSHOW_GRACE_MINUTES", "EARLY_CHECKIN_MINUTES", "ADVANCE_CANCEL_HOURS",
     "INSTANT_CANCEL_MINUTES", "MIN_DURATION_HOURS", "MAX_DURATION_HOURS", "MAX_ADVANCE_DAYS",

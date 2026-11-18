@@ -1,3 +1,9 @@
+"""Standard JSON envelope for every API response.
+
+    success: {"ok": true,  "data": ...}
+    failure: {"ok": false, "error": {"code", "message", "fields"?, ...extra}}
+    list:    data = {"items": [...], "page", "per_page", "total"}
+"""
 from flask import jsonify, request
 
 DEFAULT_PER_PAGE = 20
@@ -22,13 +28,13 @@ def fail(code, message, status=400, fields=None, extra=None):
 
 
 def get_pagination(args=None):
-    """Return page, per_page, and offset."""
+    """Read ?page=&per_page= and return (page, per_page, offset)."""
     args = request.args if args is None else args
     try:
         page = int(args.get("page", 1))
         per_page = int(args.get("per_page", DEFAULT_PER_PAGE))
     except (TypeError, ValueError):
-        from core.errors import ValidationError
+        from core.errors import ValidationError  # local import: errors.py imports this module
         raise ValidationError(fields={"page": "page and per_page must be numbers."})
     page = max(page, 1)
     per_page = min(max(per_page, 1), MAX_PER_PAGE)

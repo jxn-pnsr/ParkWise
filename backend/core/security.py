@@ -1,3 +1,10 @@
+"""Passwords and CSRF (security rules 5 and 6).
+
+* Passwords: werkzeug pbkdf2 hashes, the same format as database/seed.sql.
+* CSRF: a random token is stored in the session at login. Every request that
+  changes data (POST/PUT/PATCH/DELETE under /api) must send it back in the
+  X-CSRF-Token header. Login and register are exempt (no session yet).
+"""
 import hmac
 import secrets
 
@@ -10,7 +17,8 @@ CSRF_HEADER = "X-CSRF-Token"
 CSRF_EXEMPT = {"/api/auth/login", "/api/auth/register"}
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
 
-# Used when the email is not found to prevent email guessing.
+# Compared against when the email does not exist, so a wrong email takes as
+# long as a wrong password (does not reveal which emails are registered).
 _DUMMY_HASH = generate_password_hash("not-a-real-password")
 
 MIN_PASSWORD_LENGTH = 8
@@ -35,7 +43,7 @@ def csrf_token():
 
 
 def check_csrf():
-    """Check CSRF tokens for data-changing requests."""
+    """before_request hook. Only checks logged-in sessions: anonymous calls get 401 from the route."""
     if request.method in SAFE_METHODS or not request.path.startswith("/api/"):
         return
     if request.path in CSRF_EXEMPT or "uid" not in session:

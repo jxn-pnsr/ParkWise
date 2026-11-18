@@ -1,6 +1,14 @@
-"""
-Check user login, role, and data ownership.
-Deactivated users cannot access the system.
+"""Who is calling, and may they do this? (security rules 2 and 3)
+
+    @bp.get("/api/me/vehicles")
+    @login_required("Customer")            # one or more roles; empty = any logged-in user
+    def my_vehicles():
+        user = current_user()              # dict from the Users table
+
+    ensure_owner(row["user_id"])           # 403 when a customer opens someone else's data
+
+The user is loaded from MySQL on every request, so an account that the admin
+deactivates loses access at once (the session cookie alone is not trusted).
 """
 from functools import wraps
 
@@ -19,7 +27,7 @@ def load_user(user_id):
 
 
 def current_user():
-    """Return the logged-in user or None."""
+    """The logged-in user (dict) or None."""
     if "user" not in g:
         uid = session.get("uid")
         user = load_user(uid) if uid else None
@@ -50,7 +58,7 @@ def is_staff_or_admin(user=None):
 
 
 def ensure_owner(owner_user_id):
-    """Check if the user can access the row."""
+    """Customers may only touch their own rows. Staff and Admin pass (their routes check role)."""
     user = current_user()
     if not user:
         raise Unauthenticated()
@@ -59,7 +67,7 @@ def ensure_owner(owner_user_id):
 
 
 def actor():
-    """Return actor details for logs."""
+    """Who did it, for Integration_Outbox / Activity_Logs."""
     user = current_user() if _in_request() else None
     return {
         "actor_user_id": user["user_id"] if user else None,

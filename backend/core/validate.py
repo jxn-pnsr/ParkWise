@@ -1,3 +1,11 @@
+"""Read and check request input. Collects every problem, then raises one
+ValidationError with {field: message} so the form can show them all.
+
+    v = Input(request_json())
+    name = v.text("full_name", required=True, max_len=150)
+    hours = v.integer("duration_hours", required=True, min_value=1, max_value=12)
+    v.done()          # raises ValidationError if anything was wrong
+"""
 import re
 
 from flask import request
@@ -133,7 +141,7 @@ class Input:
 
 
 def query_int(name, default=None, min_value=None, max_value=None):
-    """Read an integer from the query string."""
+    """Read an integer from the query string (?lot_id=1)."""
     raw = request.args.get(name)
     if raw in (None, ""):
         return default
