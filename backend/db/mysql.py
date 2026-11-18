@@ -1,3 +1,24 @@
+"""MySQL access: one connection per request + a transaction helper.
+
+Use in services:
+
+    from db.mysql import transaction, fetch_one, fetch_all
+
+    # read-only
+    lot = fetch_one("SELECT * FROM Parking_Lots WHERE lot_id = %s", (lot_id,))
+
+    # writes: everything inside the block is ONE transaction.
+    # Leaving the block normally -> COMMIT. Any exception -> ROLLBACK, then re-raised.
+    with transaction() as cur:
+        cur.execute("SELECT ... FOR UPDATE", (...))
+        cur.execute("INSERT ...", (...))
+
+    # Retry once on deadlock (spec 10.1): put the body in a function.
+    run_in_transaction(create_hold, user_id, ...)   # create_hold(cur, user_id, ...)
+
+Always use %s placeholders (parameterized query). Never build SQL with f-strings
+from user input.
+"""
 import logging
 from contextlib import contextmanager
 
@@ -7,7 +28,7 @@ from pymysql.cursors import DictCursor
 
 log = logging.getLogger(__name__)
 
-DEADLOCK_ERRORS = (1213, 1205)  # Deadlock and lock timeout
+DEADLOCK_ERRORS = (1213, 1205)  # deadlock found / lock wait timeout
 
 
 def _settings():
@@ -15,13 +36,13 @@ def _settings():
         c = current_app.config
         return dict(host=c["MYSQL_HOST"], port=c["MYSQL_PORT"], user=c["MYSQL_USER"],
                     password=c["MYSQL_PASSWORD"], database=c["MYSQL_DB"])
-    from config import Config  # Used by scripts and scheduled jobs
+    from config import Config  # scripts and scheduler jobs without an app context
     return dict(host=Config.MYSQL_HOST, port=Config.MYSQL_PORT, user=Config.MYSQL_USER,
                 password=Config.MYSQL_PASSWORD, database=Config.MYSQL_DB)
 
 
 def connect():
-    """Open a MySQL connection."""
+    """Open a new connection. UTC session time zone, REPEATABLE READ, no autocommit."""
     conn = pymysql.connect(
         charset="utf8mb4",
         cursorclass=DictCursor,
@@ -34,7 +55,7 @@ def connect():
 
 
 def get_db():
-    """Get the current request's connection."""
+    """Connection for the current request (opened on first use, closed at teardown)."""
     if "mysql" not in g:
         g.mysql = connect()
     return g.mysql
@@ -47,13 +68,13 @@ def close_db(_exc=None):
             if conn.pw_in_tx:
                 conn.rollback()
             conn.close()
-        except Exception:  # Connection may already be closed.
+        except Exception:  # connection may already be dead
             pass
 
 
 @contextmanager
 def _connection():
-    """Get a connection and close it when finished if outside a request."""
+    """Request connection inside Flask, otherwise a private one that is closed after use."""
     if has_app_context():
         yield get_db()
         return
@@ -66,7 +87,11 @@ def _connection():
 
 @contextmanager
 def transaction():
-    """Commit on success or rollback on error."""
+    """BEGIN ... COMMIT, or ROLLBACK on any exception.
+
+    Transactions cannot be nested: a service that needs another service's
+    steps should accept the cursor instead of opening its own transaction.
+    """
     with _connection() as conn:
         if conn.pw_in_tx:
             raise RuntimeError("transaction() is already open on this connection (nesting is not allowed)")
@@ -92,7 +117,7 @@ def is_deadlock(exc):
 
 
 def run_in_transaction(fn, *args, retries=1, **kwargs):
-    """Run a function in a transaction and retry on deadlock."""
+    """Run fn(cur, *args, **kwargs) in a transaction; retry `retries` times on deadlock."""
     attempt = 0
     while True:
         try:
@@ -106,7 +131,7 @@ def run_in_transaction(fn, *args, retries=1, **kwargs):
             raise
 
 
-# Read helpers
+# ---- read helpers (outside a transaction) -----------------------------------
 
 def _read(sql, params, many):
     with _connection() as conn:
@@ -114,7 +139,7 @@ def _read(sql, params, many):
             cur.execute(sql, params)
             rows = cur.fetchall() if many else cur.fetchone()
         if not conn.pw_in_tx:
-            # End the read transaction to get fresh data next time.
+            # End the implicit read transaction so the next read sees fresh data.
             conn.commit()
         return rows
 
@@ -133,7 +158,7 @@ def fetch_value(sql, params=None):
 
 
 def ping():
-    """Check if MySQL is available."""
+    """True if MySQL answers. Used by /api/health."""
     try:
         return fetch_value("SELECT 1") == 1
     except Exception as e:

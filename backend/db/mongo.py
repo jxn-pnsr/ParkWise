@@ -1,3 +1,15 @@
+"""MongoDB access.
+
+MongoDB is the *follower* database (spec 10.2): if it is down, booking and
+check-in keep working and outbox events wait. So code that writes history
+must catch MongoUnavailable instead of crashing the request.
+
+    from db.mongo import get_mongo
+    db = get_mongo()                      # raises MongoUnavailable if down
+    db.Notifications.find({"userId": 4})
+
+Collections and indexes are created by database/mongo_init.js (DB team).
+"""
 import logging
 import threading
 
@@ -12,7 +24,7 @@ _client = None
 _db_name = None
 _lock = threading.Lock()
 
-# Used to test MongoDB connection failures.
+# Transaction Demo scenario 4: pretend MongoDB is down without stopping the service.
 _simulate_down = False
 
 
@@ -24,8 +36,8 @@ def _make_client(uri, db_name, timeout_ms):
     global _client, _db_name
     with _lock:
         if _client is None:
-            # MongoClient connects only when first used.
-            # Return dates as naive UTC, like MySQL.
+            # MongoClient connects lazily, so creating it never fails even if Mongo is off.
+            # tz_aware=False: dates come back as naive UTC, the same as MySQL.
             _client = MongoClient(uri, serverSelectionTimeoutMS=timeout_ms, tz_aware=False)
             _db_name = db_name
 
@@ -36,14 +48,14 @@ def init_app(app):
 
 
 def _ensure_client():
-    if _client is None:  # Used when running without create_app().
+    if _client is None:  # used from a script without create_app()
         from config import Config
         _make_client(Config.MONGO_URI, Config.MONGO_DB, Config.MONGO_TIMEOUT_MS)
     return _client
 
 
 def get_mongo():
-    """Return the database handle."""
+    """The parkwise database handle. Raises MongoUnavailable when simulated down."""
     if _simulate_down:
         raise MongoUnavailable("MongoDB is down (simulated by Transaction Demo)")
     return _ensure_client()[_db_name]
@@ -60,7 +72,7 @@ def is_simulated_down():
 
 
 def ping():
-    """Check if MongoDB is available."""
+    """True if MongoDB answers (False when simulated down)."""
     try:
         get_mongo().command("ping")
         return True
