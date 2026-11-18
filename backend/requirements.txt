@@ -4,5 +4,6 @@ cryptography>=42        # needed by PyMySQL for MySQL 8 caching_sha2_password lo
 pymongo>=4.6,<5
 python-dotenv>=1.0,<2
 tzdata>=2024.1          # timezone data for Asia/Bangkok on Windows
-APScheduler>=3.10,<4    # used from phase 3
+APScheduler>=3.10,<4    # background jobs (phase 2)
 pytest>=8,<9
+qrcode>=7.4,<9         # QR image for the simulated payment, made on this server
