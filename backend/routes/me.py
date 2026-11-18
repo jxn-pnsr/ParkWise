@@ -195,4 +195,3 @@ def dashboard():
         "lots": lots,
         "server_time": now,
     })
-
