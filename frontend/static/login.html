@@ -11,12 +11,16 @@
 <div class="auth">
  <div class="auth-shell">
   <aside class="auth-side art-login">
-    <a class="brand" href="/login.html"><span class="brand-mark">P</span><span class="brand-text">Park<b>Wise</b></span></a>
+    <a class="brand" href="/"><span class="brand-mark">P</span><span class="brand-text">Park<b>Wise</b></span></a>
     <p class="tagline">Parking, made simple.</p>
   </aside>
 
   <main class="auth-main">
     <div class="auth-card">
+      <a href="/" class="auth-back" id="back-btn" aria-label="Go back">
+        <svg class="icon"><use href="/vendor/icons/sprite.svg#chevron-left"/></svg>
+        <span>Back</span>
+      </a>
       <h1>Welcome back!</h1>
       <p class="sub">Log in to continue to ParkWise</p>
 
@@ -69,6 +73,23 @@
 
   const form = $("#login-form");
   const pw = $("#password");
+
+  const backBtn = $("#back-btn");
+  if (backBtn) {
+    backBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (getParam("registered")) {
+        location.href = "/";
+        return;
+      }
+      if (window.history.length > 1 && document.referrer && new URL(document.referrer, location.origin).origin === location.origin) {
+        window.history.back();
+      } else {
+        const next = getParam("next");
+        location.href = next ? safeNext(next, "/") : "/";
+      }
+    });
+  }
 
   // Already logged in -> go straight to the role's home page
   const current = await me().catch(() => null);

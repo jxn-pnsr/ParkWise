@@ -8,6 +8,9 @@ from datetime import timedelta
 
 from dotenv import load_dotenv
 
+_HERE = os.path.dirname(os.path.abspath(__file__))
+# Load from backend/.env first, then fallback to current working directory if different
+load_dotenv(os.path.join(_HERE, ".env"))
 load_dotenv()
 
 

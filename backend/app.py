@@ -88,6 +88,8 @@ def create_app(config_class=Config):
 
     logging.basicConfig(level=logging.DEBUG if app.config.get("DEBUG") else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # Silence noisy driver debug logs (heartbeats, connection pools)
+    logging.getLogger("pymongo").setLevel(logging.WARNING)
 
     mysql.init_app(app)
     mongo.init_app(app)
