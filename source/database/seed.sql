@@ -10,7 +10,7 @@ USE parkwise;
 
 SET @now = TIMESTAMP(DATE_FORMAT(UTC_TIMESTAMP(), '%Y-%m-%d %H:%i:00'));
 SET @iso = '%Y-%m-%dT%H:%i:%sZ';
-SET @pw  = 'pbkdf2:sha256:1000000$w1zQVoOofunQ36rp$ee34084da0fd58c28a125df2fdac617ca7c387f38d94ac93dc50a03b256d2b1b';
+SET @pw  = 'scrypt:32768:8:1$UHqtFbjFBWLNB09I$f88aba25db38b6826c90e524e7cf691a7f50b1d471aab3c55b1c06f050bbc4e522f6a4abb2eb8f97ff782ef001c36a24060c1c66aa9dc5192568bc0bad019b79';
 
 SET FOREIGN_KEY_CHECKS = 0;
 TRUNCATE TABLE Integration_Outbox;

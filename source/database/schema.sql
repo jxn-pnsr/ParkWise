@@ -243,7 +243,9 @@ INSERT INTO System_Config (config_key, config_value, description) VALUES
  ('OVERSTAY_TIER2_RATE',              '60', 'Overstay rate from the 2nd extra hour (baht per hour)'),
  ('OVERSTAY_WARN_MINUTES',            '15', 'Send "ending soon" notification this many minutes before end time'),
  ('LOGIN_MAX_FAILED',                 '5',  'Failed logins before the account is locked'),
- ('LOGIN_LOCK_MINUTES',               '5',  'Minutes the account stays locked');
+ ('LOGIN_LOCK_MINUTES',               '5',  'Minutes the account stays locked'),
+ ('BLOCK_BOOKING_WHEN_UNPAID',        '1',  '1 = a customer with an unpaid payment cannot make a new booking, 0 = allowed');
+
 
 -- Views
 -- reservation + user + vehicle + slot + lot + payment (good for the JOIN screenshot)

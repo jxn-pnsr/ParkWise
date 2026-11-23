@@ -167,12 +167,9 @@ def seed(db, conn):
                 "FROM Users u LEFT JOIN Customer_Vehicles v "
                 "  ON v.user_id = u.user_id AND v.is_default = 1 AND v.is_deleted = 0 "
                 "ORDER BY u.user_id")
-    dark_users = {1, 4, 6}
     for u in cur.fetchall():
         db.User_Preferences.insert_one({
             "userId": u["user_id"],
-            "theme": "dark" if u["user_id"] in dark_users else "light",
-            "language": "en",
             "notifications": {"holdExpired": True, "noShow": True, "checkIn": True,
                               "checkOut": True, "overstay": u["user_id"] != 7},
             "defaultVehicleId": u["default_vehicle"],
