@@ -5,6 +5,7 @@ account for LOGIN_LOCK_MINUTES. Every login and failed login is logged
 through the outbox (user.login / user.login_failed / user.locked).
 """
 import pymysql
+import threading
 
 from core.errors import AppError, Conflict, Forbidden, Locked, NotFound, Unauthenticated, ValidationError
 from core.security import hash_password, verify_password
@@ -43,25 +44,64 @@ def _ip():
     from flask import has_request_context, request
     return request.remote_addr if has_request_context() else None
 
+_phantom = {}
+_phantom_lock = threading.Lock()
+
+
+def _phantom_failed(email, now):
+    """Count a failed login for an unknown email. Returns locked_until or None."""
+    with _phantom_lock:
+        if len(_phantom) > 10_000:
+            for k in [k for k, v in _phantom.items() if v["until"] and v["until"] <= now]:
+                del _phantom[k]
+        entry = _phantom.setdefault(email, {"count": 0, "until": None})
+        if entry["until"] and entry["until"] > now:
+            return entry["until"]
+        entry["count"] += 1
+        if entry["count"] >= cfg("LOGIN_MAX_FAILED"):
+            entry["count"], entry["until"] = 0, now + minutes(cfg("LOGIN_LOCK_MINUTES"))
+            return entry["until"]
+        return None
+
+
+def _phantom_locked(email, now):
+    with _phantom_lock:
+        entry = _phantom.get(email)
+        return entry["until"] if entry and entry["until"] and entry["until"] > now else None
+
 
 def authenticate(email, password):
     """Return the user row, or raise. Failed attempts are saved even though we raise."""
     now = now_utc()
+    ip = _ip()
+    u = fetch_one("SELECT user_id, password_hash, locked_until FROM Users WHERE email = %s", (email,))
     outcome, payload = None, None
-    with transaction() as cur:
-        cur.execute("SELECT user_id, email, password_hash, role, is_active, failed_login_count, locked_until "
-                    "FROM Users WHERE email = %s FOR UPDATE", (email,))
-        u = cur.fetchone()
-        ip = _ip()
-        anon = {"actor_user_id": u["user_id"] if u else None,
-                "actor_role": u["role"] if u else "Anonymous", "ip_address": ip}
 
-        if u and u["locked_until"] and u["locked_until"] > now:
-            write_event(cur, "user.login_failed", "user", u["user_id"],
-                        metadata={"email": email, "reason": "locked"}, who=anon)
-            outcome, payload = "locked", u["locked_until"]
-        elif not verify_password(u["password_hash"] if u else None, password):
-            if u:
+    if not u:
+        until = _phantom_locked(email, now)
+        if until is None:
+            verify_password(None, password)          # same work as a real wrong password
+            until = _phantom_failed(email, now)
+            outcome, payload = ("locked", until) if until else ("bad", None)
+        else:
+            outcome, payload = "locked", until
+        with transaction() as cur:
+            write_event(cur, "user.login_failed", "user", None,
+                        metadata={"email": email, "reason": "locked" if outcome == "locked" else "invalid_credentials"},
+                        who={"actor_user_id": None, "actor_role": "Anonymous", "ip_address": ip})
+    else:
+        locked_now = u["locked_until"] and u["locked_until"] > now
+        password_ok = False if locked_now else verify_password(u["password_hash"], password)
+        with transaction() as cur:
+            cur.execute("SELECT user_id, email, password_hash, role, is_active, failed_login_count, locked_until "
+                        "FROM Users WHERE user_id = %s FOR UPDATE", (u["user_id"],))
+            u = cur.fetchone()
+            anon = {"actor_user_id": u["user_id"], "actor_role": u["role"], "ip_address": ip}
+            if u["locked_until"] and u["locked_until"] > now:
+                write_event(cur, "user.login_failed", "user", u["user_id"],
+                            metadata={"email": email, "reason": "locked"}, who=anon)
+                outcome, payload = "locked", u["locked_until"]
+            elif not password_ok:
                 count = u["failed_login_count"] + 1
                 if count >= cfg("LOGIN_MAX_FAILED"):
                     until = now + minutes(cfg("LOGIN_LOCK_MINUTES"))
@@ -74,20 +114,18 @@ def authenticate(email, password):
                 else:
                     cur.execute("UPDATE Users SET failed_login_count = %s WHERE user_id = %s", (count, u["user_id"]))
                     outcome, payload = "bad", count
+                write_event(cur, "user.login_failed", "user", u["user_id"],
+                            metadata={"email": email, "reason": "invalid_credentials",
+                                      "attempt": payload if outcome == "bad" else None}, who=anon)
+            elif not u["is_active"]:
+                write_event(cur, "user.login_failed", "user", u["user_id"],
+                            metadata={"email": email, "reason": "inactive"}, who=anon)
+                outcome = "inactive"
             else:
-                outcome = "bad"
-            write_event(cur, "user.login_failed", "user", u["user_id"] if u else None,
-                        metadata={"email": email, "reason": "invalid_credentials",
-                                  "attempt": payload if outcome == "bad" else None}, who=anon)
-        elif not u["is_active"]:
-            write_event(cur, "user.login_failed", "user", u["user_id"],
-                        metadata={"email": email, "reason": "inactive"}, who=anon)
-            outcome = "inactive"
-        else:
-            cur.execute("UPDATE Users SET failed_login_count = 0, locked_until = NULL WHERE user_id = %s",
-                        (u["user_id"],))
-            write_event(cur, "user.login", "user", u["user_id"], metadata={}, who=anon)
-            outcome = "ok"
+                cur.execute("UPDATE Users SET failed_login_count = 0, locked_until = NULL WHERE user_id = %s",
+                            (u["user_id"],))
+                write_event(cur, "user.login", "user", u["user_id"], metadata={}, who=anon)
+                outcome = "ok"
 
     # raise only after COMMIT, so the failed-attempt counter is saved
     if outcome == "locked":
@@ -98,7 +136,14 @@ def authenticate(email, password):
         raise Unauthenticated("INVALID_CREDENTIALS", "The email or password is incorrect.")
     if outcome == "inactive":
         raise Forbidden("ACCOUNT_INACTIVE", "This account has been deactivated. Please contact an administrator.")
-    return public_user(fetch_one(f"SELECT {PUBLIC_USER} FROM Users WHERE user_id = %s", (u["user_id"],)))
+    return {**public_user(fetch_one(f"SELECT {PUBLIC_USER} FROM Users WHERE user_id = %s", (u["user_id"],))),
+            "_password_hash": u["password_hash"]}
+
+
+def reset_phantom_lockouts():
+    """Tests."""
+    with _phantom_lock:
+        _phantom.clear()
 
 
 def log_logout(user):
@@ -126,13 +171,16 @@ def update_profile(user_id, full_name=None, phone=None, clear_phone=False):
 
 
 def change_password(user_id, current_password, new_password):
+    row = fetch_one("SELECT password_hash FROM Users WHERE user_id = %s", (user_id,))
+    if not row or not verify_password(row["password_hash"], current_password):   # slow hash, no lock held
+        raise ValidationError(fields={"current_password": "Your current password is incorrect."})
+    if current_password == new_password:
+        raise ValidationError(fields={"new_password": "Choose a password different from the current one."})
+    new_hash = hash_password(new_password)
     with transaction() as cur:
-        cur.execute("SELECT password_hash FROM Users WHERE user_id = %s FOR UPDATE", (user_id,))
-        row = cur.fetchone()
-        if not row or not verify_password(row["password_hash"], current_password):
-            raise ValidationError(fields={"current_password": "Your current password is incorrect."})
-        if current_password == new_password:
-            raise ValidationError(fields={"new_password": "Choose a password different from the current one."})
-        cur.execute("UPDATE Users SET password_hash = %s, updated_at = %s WHERE user_id = %s",
-                    (hash_password(new_password), now_utc(), user_id))
-        write_event(cur, "user.password_changed", "user", user_id, metadata={})
+        cur.execute("UPDATE Users SET password_hash = %s, updated_at = %s WHERE user_id = %s AND password_hash = %s",
+                    (new_hash, now_utc(), user_id, row["password_hash"]))
+        if not cur.rowcount:      # changed by another request in the meantime
+            raise Conflict("PASSWORD_CHANGED", "Your password was changed somewhere else. Log in again.")
+        write_event(cur, "user.password_changed", "user", user_id, metadata={"other_sessions_logged_out": True})
+    return new_hash
