@@ -38,8 +38,6 @@ def reset_skip():
 LEGACY_KEYS = ("theme", "language")     
 
 DEFAULT_PREFERENCES = {
-    "theme": "light",
-    "language": "en",
     "notifications": {"holdExpired": True, "noShow": True, "checkIn": True, "checkOut": True, "overstay": True},
     "defaultVehicleId": None,
 }
