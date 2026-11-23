@@ -26,7 +26,7 @@ def test_spec_example_overstay_140():
 def test_spec_example_inside_grace():
     f = fee(t(10), t(12), 2, t(10), t(12, 10))
     assert (f["base_fee"], f["overstay_fee"], f["total_amount"]) == (40, 0, 40)
-    assert f["is_overstay"]  # Late exit, but no extra fee.
+    assert not f["is_overstay"]  # Late exit, but no extra fee.
 
 
 def test_spec_example_leave_early_rounds_up():

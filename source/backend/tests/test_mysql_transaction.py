@@ -127,11 +127,44 @@ def test_session_is_utc(app):
         assert mysql.fetch_value("SELECT @@session.transaction_isolation") == "REPEATABLE-READ"
 
 
-def test_request_connection_closed_at_teardown(app):
+
+def test_request_connection_given_back_at_teardown(app):
+    """With the pool on, the connection is rolled back and kept idle for the next request."""
+    mysql.clear_pool()
+    with app.app_context():
+        conn = mysql.get_db()
+        assert conn.open
+    assert conn.open and not conn.pw_in_tx
+    assert any(conn in idle for idle in mysql._pool.values())
+    with app.app_context():
+        assert mysql.get_db() is conn           
+
+
+def test_request_connection_closed_at_teardown_without_pool(app):
+    mysql.clear_pool()
+    app.config["MYSQL_POOL_SIZE"] = 0
     with app.app_context():
         conn = mysql.get_db()
         assert conn.open
     assert not conn.open
+
+
+def test_pooled_connection_does_not_keep_locks(app):
+    """A lock taken in one request must not survive into the next user of the connection."""
+    mysql.clear_pool()
+    with app.app_context():
+        conn = mysql.get_db()
+        conn.begin()
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM Parking_Slots WHERE slot_id = 1 FOR UPDATE")
+    other = mysql.connect()
+    try:
+        with other.cursor() as cur:
+            cur.execute("SET SESSION innodb_lock_wait_timeout = 1")
+            cur.execute("SELECT * FROM Parking_Slots WHERE slot_id = 1 FOR UPDATE")   
+        other.rollback()
+    finally:
+        other.close()
 
 
 def test_mongo_simulated_down(app):
@@ -147,6 +180,7 @@ def test_mongo_simulated_down(app):
 
 
 def test_mysql_down_does_not_crash_health(app):
+    mysql.clear_pool()
     with mock.patch.object(mysql, "connect", side_effect=pymysql.err.OperationalError(2003, "down")):
         r = app.test_client().get("/api/health")
     assert r.status_code == 503

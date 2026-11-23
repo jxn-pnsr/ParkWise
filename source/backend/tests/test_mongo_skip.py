@@ -16,7 +16,7 @@ def test_mongo_outage_is_cached(monkeypatch):
     mongo_read.reset_skip()
     try:
         assert mongo_read.unread_notifications(1) == 0          # tries once, fails
-        assert mongo_read.preferences(1)["theme"] == "light"    # skipped: defaults
+        assert mongo_read.preferences(1)["notifications"]["checkIn"] is True    # skipped: defaults
         assert mongo_read.unread_notifications(1) == 0          # skipped
         assert len(calls) == 1
     finally:
