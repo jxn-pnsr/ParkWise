@@ -4,27 +4,86 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ParkWise</title>
-  <script src="/js/theme-init.js"></script>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
 <main id="page" hidden>
   <div class="page-head" id="head"></div>
-  <section class="card" id="body"></section>
+  <section class="dash-stats four" id="stats" aria-label="Summary"></section>
+
+  <section class="panel" aria-labelledby="occ-title">
+    <div class="panel-head"><h2 id="occ-title">Weekly occupancy</h2><span class="step">last 7 days · share of bay time booked</span></div>
+    <div id="chart"></div>
+  </section>
+
+  <div class="dash-grid mt-3">
+    <section class="panel" aria-labelledby="recent-title">
+      <div class="panel-head"><h2 id="recent-title">Latest reservations</h2><a class="btn btn-outline" href="/admin/reservations.html">See all</a></div>
+      <div class="table-wrap"><table class="table">
+        <thead><tr><th>Plate</th><th>Bay</th><th>Booked</th><th>Status</th></tr></thead><tbody id="recent"></tbody></table></div>
+    </section>
+    <section class="panel" aria-labelledby="sys-title">
+      <div class="panel-head"><h2 id="sys-title">System status</h2></div>
+      <div class="health" id="health"></div>
+      <div class="stack mt-2">
+        <a class="btn btn-outline btn-block" href="/admin/outbox.html">Open integration outbox</a>
+        <a class="btn btn-outline btn-block" href="/admin/demo.html">Transaction demo</a>
+      </div>
+    </section>
+  </div>
 </main>
 <script type="module">
-  // Phase 1 placeholder: login + layout work. Data cards come when the dashboard API is ready.
-  import { mountShell, pageHeader } from "/js/shell.js";
-  import { html, icon, render, $, emptyState } from "/js/ui.js";
+  import { api } from "/js/api.js";
+  import { adminPage } from "/js/admin.js";
+  import { html, icon, render, $, toastError, reservationBadge } from "/js/ui.js";
+  import { fmtMoney, fmtNumber, fmtRange, fmtDateTime } from "/js/format.js";
 
-  const user = await mountShell({ role: "Admin", active: "dashboard" });
-  pageHeader($("#head"), {
-    title: "System overview",
-    subtitle: "Monitor and manage the parking system.",
-    actions: "",
-  });
-  render($("#body"), emptyState({ iconName: "layout-grid", title: "This page is under construction",
-    text: "Sign-in and permissions are working. Overview data will appear once this page's API is ready." }));
+  await adminPage({ active: "dashboard", title: "System overview", subtitle: "Bookings, money and system health at a glance.",
+    actions: html`<button class="btn btn-primary" id="refresh">${icon("refresh-cw")} Refresh</button>` });
+
+  const change = (pct, word = "vs last month") => pct === null || pct === undefined ? "No data for last month"
+    : html`<span style="color:${pct >= 0 ? "#2C6B4A" : "#b93c29"}">${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct)}%</span> ${word}`;
+
+  async function load() {
+    let d;
+    try { d = await api.get("/admin/stats"); } catch (err) { toastError(err); return; }
+    const parked = d.reservations_by_status["In Use"] || 0;
+    render($("#stats"), html`
+      <article class="dash-stat"><div class="dash-stat-label">${icon("calendar")}<span>Bookings this month</span></div>
+        <div class="dash-stat-value">${fmtNumber(d.reservations_this_month)}</div><div class="dash-stat-sub">${change(d.reservations_change_pct)}</div></article>
+      <article class="dash-stat"><div class="dash-stat-label">${icon("wallet")}<span>Revenue this month</span></div>
+        <div class="dash-stat-value green">${fmtMoney(d.revenue_this_month)}</div><div class="dash-stat-sub">${change(d.revenue_change_pct)} · today ${fmtMoney(d.revenue_today)}</div></article>
+      <article class="dash-stat"><div class="dash-stat-label">${icon("users")}<span>Active members</span></div>
+        <div class="dash-stat-value">${fmtNumber(d.users.total)}</div><div class="dash-stat-sub">${d.users.customers} customers · ${d.users.staff} staff · +${d.users.new_this_month} this month</div></article>
+      <article class="dash-stat"><div class="dash-stat-label">${icon("car")}<span>Parked now</span></div>
+        <div class="dash-stat-value">${parked}<small>of ${d.active_bays}</small></div><div class="dash-stat-sub">${d.unpaid.count} unpaid (${fmtMoney(d.unpaid.amount)})</div></article>`);
+
+    const max = Math.max(10, ...d.daily_occupancy.map((x) => x.occupancy_pct));
+    const day = (iso) => new Date(iso + "T00:00:00Z").toLocaleDateString("en-GB", { weekday: "short", timeZone: "UTC" });
+    const avg = d.daily_occupancy.reduce((s, x) => s + x.occupancy_pct, 0) / d.daily_occupancy.length;
+    render($("#chart"), html`
+      <div class="bars" role="img" aria-label="Occupancy for the last 7 days">${d.daily_occupancy.map((x, i) => html`
+        <div class="bar-col ${i === 6 ? "today" : ""}"><span class="bar-val">${x.occupancy_pct}%</span>
+          <span class="bar" style="height:${Math.max(2, (x.occupancy_pct / max) * 140)}px" title="${x.date}: ${x.occupancy_pct}%"></span></div>`)}</div>
+      <div class="bar-days">${d.daily_occupancy.map((x, i) => html`<span>${i === 6 ? "Today" : day(x.date)}</span>`)}</div>
+      <p class="muted small mt-2">Average ${avg.toFixed(1)}% across ${d.active_bays} open bays.</p>`);
+
+    render($("#recent"), d.recent.map((r) => html`<tr>
+      <td><div class="cell-main"><span class="cell-ic">${icon("car")}</span><div><b>${r.vehicle.plate_number}</b><small>${r.customer.full_name}</small></div></div></td>
+      <td>${r.slot.slot_code}<span class="cell-sub">${r.slot.lot_name}</span></td>
+      <td>${fmtRange(r.start_time, r.end_time)}</td><td>${reservationBadge(r.status, r.display_label)}</td></tr>`));
+
+    const ok = (good, text) => html`<span class="badge ${good ? "tone-ok" : "tone-bad"}">${text}</span>`;
+    render($("#health"), html`
+      <div><span>MySQL (source of truth)</span>${ok(true, "Online")}</div>
+      <div><span>MongoDB (history)</span>${ok(d.mongo === "ok", d.mongo === "ok" ? "Online" : d.mongo === "simulated_down" ? "Down (demo)" : "Down")}</div>
+      <div><span>Outbox waiting</span><b>${d.outbox.Pending}</b></div>
+      <div><span>Outbox failed</span>${d.outbox.Failed ? html`<a href="/admin/outbox.html?status=Failed"><b style="color:#b93c29">${d.outbox.Failed} · retry</b></a>` : html`<b>0</b>`}</div>
+      <div><span>Background jobs</span>${ok(d.scheduler.running, d.scheduler.running ? "Running" : "Off")}</div>
+      <div><span>Server time</span><span class="muted">${fmtDateTime(d.server_time)}</span></div>`);
+  }
+  $("#refresh").onclick = load;
+  load();
 </script>
 </body>
 </html>

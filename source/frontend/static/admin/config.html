@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>System settings – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <div class="demo-banner"><svg class="icon"><use href="/vendor/icons/sprite.svg#info"/></svg>
+    <span>Changes apply within a few seconds to new bookings and fees. Existing bookings keep their times. For a live demo you can set <b>HOLD_MINUTES</b> to 1.</span></div>
+  <section class="panel"><div id="table"></div></section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog } from "/js/admin.js";
+  import { html, $, $$, toast } from "/js/ui.js";
+  import { fmtDateTime } from "/js/format.js";
+
+  await adminPage({ active: "config", title: "System settings", subtitle: "Booking rules and prices, stored in the System_Config table." });
+
+  const UNIT = { HOLD_MINUTES: "min", NOSHOW_GRACE_MINUTES: "min", EARLY_CHECKIN_MINUTES: "min", ADVANCE_CANCEL_HOURS: "h",
+    INSTANT_CANCEL_MINUTES: "min", MIN_DURATION_HOURS: "h", MAX_DURATION_HOURS: "h", MAX_ADVANCE_DAYS: "days",
+    MAX_ACTIVE_RESERVATIONS_PER_USER: "bookings", RATE_PER_HOUR: "THB/h", OVERSTAY_GRACE_MINUTES: "min",
+    OVERSTAY_TIER1_RATE: "THB/h", OVERSTAY_TIER2_RATE: "THB/h", OVERSTAY_WARN_MINUTES: "min", LOGIN_MAX_FAILED: "tries", LOGIN_LOCK_MINUTES: "min", BLOCK_BOOKING_WHEN_UNPAID: "1 = on, 0 = off" };
+
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "Setting", render: (c) => html`<b class="mono-sm">${c.config_key}</b><span class="cell-sub">${c.description || ""}</span>` },
+      { label: "Value", cls: "num", render: (c) => html`<b style="font-size:18px">${c.config_value}</b> <span class="muted small">${UNIT[c.config_key] || ""}</span>` },
+      { label: "Last change", render: (c) => html`${fmtDateTime(c.updated_at)}${c.updated_by_name ? html`<span class="cell-sub">by ${c.updated_by_name}</span>` : ""}` },
+    ],
+    load: () => api.get("/admin/config"),
+    rowActions: (c) => html`<button class="btn btn-secondary btn-sm" data-edit="${c.config_key}">Change</button>`,
+    wire: (root) => $$("[data-edit]", root).forEach((b) => b.onclick = async () => {
+      const c = table.find(b.dataset.edit, "config_key");
+      const out = await formDialog({ title: c.config_key, intro: c.description,
+        fields: [{ name: "value", label: `Value (${UNIT[c.config_key] || "number"})`, type: "number", value: c.config_value, required: true,
+          min: c.min ?? 0, hint: c.min != null ? `Allowed: ${c.min} to ${c.max}.` : "" }],
+        submit: (v) => api.put(`/admin/config/${c.config_key}`, { value: v.value }) });
+      if (out) { toast(`${c.config_key} updated.`); table.refresh(); }
+    }),
+  });
+  table.refresh();
+</script>
+</body>
+</html>

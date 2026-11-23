@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>User preferences – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="toolbar"><span class="muted small">MongoDB · User_Preferences (one document per user; created at sign-up)</span></div>
+    <div id="table"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog, act } from "/js/admin.js";
+  import { html, $, $$, confirmDialog } from "/js/ui.js";
+  import { fmtDateTime, ROLE_LABEL } from "/js/format.js";
+
+  await adminPage({ active: "preferences", title: "User preferences", subtitle: "Notification switches of every user. Reset brings a user back to the defaults." });
+
+  const KEYS = { holdExpired: "Hold expired", noShow: "No-show", checkIn: "Check-in", checkOut: "Check-out", overstay: "Overstay" };
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "User", render: (p) => html`<b>${p.full_name}</b><span class="cell-sub">${p.email} · ${ROLE_LABEL[p.role]}</span>` },
+      { label: "Notifications off", render: (p) => Object.entries(p.notifications).filter(([, v]) => !v).map(([k]) => KEYS[k]).join(", ") || "–" },
+      { label: "Stored", render: (p) => p.has_document ? html`${fmtDateTime(p.updatedAt)}` : html`<span class="badge tone-mute plain">defaults</span>` },
+    ],
+    load: () => api.get("/admin/preferences"),
+    rowActions: (p) => [html`<button class="btn btn-secondary btn-sm" data-edit="${p.user_id}">Edit</button>`,
+      p.has_document ? html`<button class="btn btn-secondary btn-sm" data-reset="${p.user_id}">Reset</button>` : ""],
+    wire: (root) => {
+      const find = (id) => table.find(id, "user_id");
+      $$("[data-edit]", root).forEach((b) => b.onclick = () => edit(find(b.dataset.edit)));
+      $$("[data-reset]", root).forEach((b) => b.onclick = async () => {
+        const p = find(b.dataset.reset);
+        if (!(await confirmDialog({ title: `Reset ${p.full_name}'s preferences?`, message: "Deletes their document; the defaults apply again.", confirmText: "Reset" }))) return;
+        await act(b, () => api.del(`/admin/preferences/${p.user_id}`), "Preferences reset."); table.refresh();
+      });
+    },
+  });
+  table.refresh();
+
+  async function edit(p) {
+    const out = await formDialog({ title: `Preferences of ${p.full_name}`,
+      fields: [...Object.entries(KEYS).map(([k, label]) => ({ name: k, label: `${label} notifications`, type: "checkbox", value: p.notifications[k] }))],
+      submit: (v) => api.put(`/admin/preferences/${p.user_id}`, {
+        notifications: Object.fromEntries(Object.keys(KEYS).map((k) => [k, v[k]])) }) });
+    if (out) table.refresh();
+  }
+</script>
+</body>
+</html>

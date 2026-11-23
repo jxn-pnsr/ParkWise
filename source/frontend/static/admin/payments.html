@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payments – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="toolbar" id="filters">
+      <input class="input" type="search" data-filter="q" placeholder="Plate or customer" aria-label="Search">
+      <select class="select" data-filter="status" aria-label="Status"><option value="">All statuses</option><option value="Pending">Unpaid</option><option value="Paid">Paid</option><option value="Failed">Failed</option></select>
+      <select class="select" data-filter="include_deleted" aria-label="Deleted"><option value="">Hide deleted</option><option value="1">Show deleted too</option></select>
+    </div>
+    <div id="table"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog, act, filterValues, onFilters } from "/js/admin.js";
+  import { html, icon, $, $$, confirmDialog, paymentBadge } from "/js/ui.js";
+  import { fmtMoney, fmtDateTime, fmtDate, PAYMENT_METHOD } from "/js/format.js";
+
+  await adminPage({ active: "payments", title: "Payments", subtitle: "Simulated payments, made at check-out. Mark one as Failed to test what the customer sees.",
+    actions: html`<button class="btn btn-primary" id="add">${icon("plus")} Add payment</button>` });
+
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "#", render: (p) => html`<span class="mono-sm">${p.payment_id}</span>` },
+      { label: "Customer", render: (p) => html`<b>${p.customer.full_name}</b><span class="cell-sub">${p.reservation.plate_number} · bay ${p.reservation.slot_code}</span>` },
+      { label: "Visit", render: (p) => html`${fmtDate(p.reservation.checked_out_at || p.created_at)}<span class="cell-sub">reservation #${p.reservation_id}</span>` },
+      { label: "Parking", cls: "num", render: (p) => fmtMoney(p.base_fee, 2) },
+      { label: "Overstay", cls: "num", render: (p) => Number(p.overstay_fee) ? fmtMoney(p.overstay_fee, 2) : "–" },
+      { label: "Total", cls: "num", render: (p) => html`<b>${fmtMoney(p.total_amount, 2)}</b>` },
+      { label: "Status", render: (p) => html`${p.is_deleted ? html`<span class="badge tone-mute">Deleted</span> ` : ""}${paymentBadge(p.status)}${p.paid_at ? html`<span class="cell-sub">${PAYMENT_METHOD[p.method] || p.method} · ${fmtDateTime(p.paid_at)}</span>` : ""}` },
+    ],
+    load: (page) => api.get("/admin/payments", { page, per_page: 15, ...filterValues($("#filters")) }),
+    rowActions: (p) => p.is_deleted ? "" : [
+      html`<button class="btn btn-secondary btn-sm" data-edit="${p.payment_id}">Status</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-del="${p.payment_id}" aria-label="Delete">${icon("x", "icon icon-sm")}</button>`],
+    wire: (root) => {
+      const find = (id) => table.find(id, "payment_id");
+      $$("[data-edit]", root).forEach((b) => b.onclick = () => edit(find(b.dataset.edit)));
+      $$("[data-del]", root).forEach((b) => b.onclick = async () => {
+        const p = find(b.dataset.del);
+        if (!(await confirmDialog({ title: `Delete payment #${p.payment_id}?`, message: "Soft delete: hidden from lists but kept for the records.", confirmText: "Delete", danger: true }))) return;
+        await act(b, () => api.del(`/admin/payments/${p.payment_id}`), "Payment deleted."); table.refresh();
+      });
+    },
+  });
+  onFilters($("#filters"), () => table.refresh(1));
+  table.refresh();
+
+  async function edit(p) {
+    const out = await formDialog({ title: `Payment #${p.payment_id} · ${fmtMoney(p.total_amount, 2)}`, intro: `${p.customer.full_name}, currently ${p.status}.`,
+      fields: [{ name: "status", label: "Status", type: "select", value: p.status, options: [["Pending", "Unpaid"], ["Paid", "Paid"], ["Failed", "Failed (test)"]] },
+               { name: "method", label: "Method (when Paid)", type: "select", value: p.method || "Cash", options: [["Cash", "Cash"], ["QR", "QR"]] }],
+      submit: (v) => api.patch(`/admin/payments/${p.payment_id}`, v) });
+    if (out) table.refresh();
+  }
+
+  $("#add").onclick = async () => {
+    const out = await formDialog({ title: "Add a payment by hand", intro: "For a completed visit that has no payment. Leave the amounts empty to calculate them from the check-in and check-out times.",
+      fields: [{ name: "reservation_id", label: "Reservation #", type: "number", required: true, min: 1 },
+               { name: "base_fee", label: "Parking fee (optional)", type: "number" },
+               { name: "overstay_fee", label: "Overstay fee (optional)", type: "number" }],
+      submit: (v) => api.post("/admin/payments", Object.fromEntries(Object.entries(v).filter(([, x]) => x !== null))) });
+    if (out) table.refresh(1);
+  };
+</script>
+</body>
+</html>

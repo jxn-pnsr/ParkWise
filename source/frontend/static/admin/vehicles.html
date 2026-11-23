@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vehicles – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="toolbar" id="filters">
+      <input class="input" type="search" data-filter="q" placeholder="Search plate or owner" aria-label="Search">
+      <select class="select" data-filter="include_deleted" aria-label="Deleted"><option value="">Hide deleted</option><option value="1">Show deleted too</option></select>
+    </div>
+    <div id="table"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog, act, filterValues, onFilters } from "/js/admin.js";
+  import { html, icon, $, $$, confirmDialog } from "/js/ui.js";
+  import { fmtDate } from "/js/format.js";
+
+  await adminPage({ active: "vehicles", title: "Vehicles", subtitle: "Every customer car. Deleting is a soft delete: old bookings keep their vehicle.",
+    actions: html`<button class="btn btn-primary" id="add">${icon("plus")} Add vehicle</button>` });
+
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "Plate", render: (v) => html`<div class="cell-main"><span class="cell-ic">${icon("car")}</span><div><b>${v.plate_number}</b><small>${v.province}</small></div></div>` },
+      { label: "Owner", render: (v) => html`${v.owner.full_name}<span class="cell-sub">${v.owner.email}</span>` },
+      { label: "Main", render: (v) => v.is_default ? html`<span class="badge tone-ok plain">Main</span>` : "–" },
+      { label: "Status", render: (v) => v.is_deleted ? html`<span class="badge tone-mute">Deleted</span>` : html`<span class="badge tone-ok">Active</span>` },
+      { label: "Added", render: (v) => fmtDate(v.created_at) },
+    ],
+    load: (page) => api.get("/admin/vehicles", { page, per_page: 15, ...filterValues($("#filters")) }),
+    rowActions: (v) => v.is_deleted ? "" : [
+      html`<button class="btn btn-secondary btn-sm" data-edit="${v.vehicle_id}">Edit</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-del="${v.vehicle_id}" aria-label="Delete">${icon("x", "icon icon-sm")}</button>`],
+    wire: (root) => {
+      const find = (id) => table.find(id, "vehicle_id");
+      $$("[data-edit]", root).forEach((b) => b.onclick = () => edit(find(b.dataset.edit)));
+      $$("[data-del]", root).forEach((b) => b.onclick = async () => {
+        const v = find(b.dataset.del);
+        if (!(await confirmDialog({ title: `Delete ${v.plate_number}?`, message: "Soft delete: the car is hidden, past bookings keep it.", confirmText: "Delete", danger: true }))) return;
+        await act(b, () => api.del(`/admin/vehicles/${v.vehicle_id}`), "Vehicle deleted."); table.refresh();
+      });
+    },
+  });
+  onFilters($("#filters"), () => table.refresh(1));
+  table.refresh();
+
+  const customers = (await api.get("/admin/users", { role: "Customer", per_page: 100 })).items;
+  $("#add").onclick = async () => {
+    const out = await formDialog({ title: "Add a vehicle",
+      fields: [
+        { name: "user_id", label: "Owner", type: "select", options: customers.map((c) => [c.user_id, `${c.full_name} (${c.email})`]) },
+        { name: "plate_number", label: "Licence plate", required: true },
+        { name: "province", label: "Province", required: true, value: "Bangkok" },
+        { name: "is_default", label: "Make it the owner's main vehicle", type: "checkbox" },
+      ],
+      submit: (v) => api.post("/admin/vehicles", { ...v, user_id: Number(v.user_id) }),
+    });
+    if (out) table.refresh(1);
+  };
+
+  async function edit(v) {
+    const out = await formDialog({ title: `Edit ${v.plate_number}`, intro: `Owner: ${v.owner.full_name}`,
+      fields: [
+        { name: "plate_number", label: "Licence plate", value: v.plate_number, required: true },
+        { name: "province", label: "Province", value: v.province, required: true },
+        { name: "is_default", label: "Owner's main vehicle", type: "checkbox", value: v.is_default },
+      ],
+      submit: (x) => api.patch(`/admin/vehicles/${v.vehicle_id}`, x),
+    });
+    if (out) table.refresh();
+  }
+</script>
+</body>
+</html>

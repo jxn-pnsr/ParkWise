@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reservations – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="toolbar" id="filters">
+      <input class="input" type="search" data-filter="q" placeholder="Plate, customer or #id" aria-label="Search">
+      <select class="select" data-filter="status" aria-label="Status"><option value="">All statuses</option>
+        <option>Held</option><option>Confirmed</option><option>In Use</option><option>Completed</option><option>Cancelled</option><option>Expired</option><option>No-show</option></select>
+      <select class="select" data-filter="booking_type" aria-label="Type"><option value="">Both types</option><option value="Advance">Book ahead</option><option value="Instant">Book now</option></select>
+      <select class="select" data-filter="overstay" aria-label="Overstay"><option value="">Any</option><option value="1">Overstay only</option></select>
+      <input class="input" type="date" data-filter="from" aria-label="From date">
+    </div>
+    <div id="table"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog, act, filterValues, onFilters } from "/js/admin.js";
+  import { html, icon, $, $$, confirmDialog, reservationBadge } from "/js/ui.js";
+  import { fmtRange, fmtMoney, BOOKING_TYPE } from "/js/format.js";
+
+  await adminPage({ active: "reservations", title: "Reservations", subtitle: "Every booking. Move a booking to another bay, override a status or cancel (always with a reason; the customer is notified)." });
+
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "#", render: (r) => html`<span class="mono-sm">${r.reservation_id}</span>` },
+      { label: "Plate / customer", render: (r) => html`<b>${r.vehicle.plate_number}</b><span class="cell-sub">${r.customer.full_name}</span>` },
+      { label: "Bay", render: (r) => html`${r.slot.slot_code}<span class="cell-sub">${r.slot.lot_name}</span>` },
+      { label: "Booked", render: (r) => html`${fmtRange(r.start_time, r.end_time)}<span class="cell-sub">${BOOKING_TYPE[r.booking_type]}</span>` },
+      { label: "Status", render: (r) => reservationBadge(r.status, r.display_label) },
+      { label: "Payment", cls: "num", render: (r) => r.payment ? html`${fmtMoney(r.payment.total_amount, 2)}<span class="cell-sub">${r.payment.status}</span>` : "–" },
+    ],
+    load: (page) => {
+      const f = filterValues($("#filters"));
+      if (f.from) f.from = `${f.from}T00:00:00+07:00`;
+      return api.get("/admin/reservations", { page, per_page: 15, ...f });
+    },
+    rowActions: (r) => {
+      const live = ["Held", "Confirmed", "In Use"].includes(r.status);
+      return [
+        live ? html`<button class="btn btn-secondary btn-sm" data-move="${r.reservation_id}">Move bay</button>` : "",
+        ["Held", "Confirmed"].includes(r.status) ? html`<button class="btn btn-secondary btn-sm" data-status="${r.reservation_id}">Status</button>` : "",
+        ["Held", "Confirmed"].includes(r.status) ? html`<button class="btn btn-secondary btn-sm" data-cancel="${r.reservation_id}">Cancel</button>` : "",
+        ["Expired", "Cancelled"].includes(r.status) ? html`<button class="btn btn-secondary btn-sm" data-del="${r.reservation_id}" aria-label="Delete">${icon("x", "icon icon-sm")}</button>` : "",
+      ];
+    },
+    wire: (root) => {
+      const find = (id) => table.find(id, "reservation_id");
+      $$("[data-move]", root).forEach((b) => b.onclick = () => move(find(b.dataset.move)));
+      $$("[data-status]", root).forEach((b) => b.onclick = () => status(find(b.dataset.status)));
+      $$("[data-cancel]", root).forEach((b) => b.onclick = () => cancel(find(b.dataset.cancel)));
+      $$("[data-del]", root).forEach((b) => b.onclick = async () => {
+        const r = find(b.dataset.del);
+        if (!(await confirmDialog({ title: `Delete reservation #${r.reservation_id}?`, message: "It never used a bay, so it can be removed for good.", confirmText: "Delete", danger: true }))) return;
+        await act(b, () => api.del(`/admin/reservations/${r.reservation_id}`), "Reservation deleted."); table.refresh();
+      });
+    },
+  });
+  onFilters($("#filters"), () => table.refresh(1));
+  table.refresh();
+
+  async function move(r) {
+    // offer the bays of the same lot that are free for this booking's time
+    const start = new Date(Math.max(Date.now(), new Date(r.start_time).getTime()));
+    const hours = Math.max(1, Math.ceil((new Date(r.end_time) - start) / 3600000));
+    const lot = await api.get(`/lots/${r.slot.lot_id}/slots`, { start: start.toISOString(), duration_hours: Math.min(hours, 12) });
+    const free = lot.slots.filter((s) => s.display_status === "Available");
+    const out = await formDialog({ title: `Move #${r.reservation_id} (${r.vehicle.plate_number})`,
+      intro: `Now in bay ${r.slot.slot_code}, ${fmtRange(r.start_time, r.end_time)}. Only free bays are listed.`,
+      fields: [{ name: "slot_id", label: "New bay", type: "select", options: free.length ? free.map((s) => [s.slot_id, `${s.slot_code}${s.slot_type === "EV" ? " (EV)" : ""}`]) : [["", "No free bay in this lot"]] },
+               { name: "admin_reason", label: "Reason (sent to the customer)", required: true, value: "Your bay is still occupied by the previous car" }],
+      submitText: "Move booking",
+      submit: (v) => api.patch(`/admin/reservations/${r.reservation_id}`, { slot_id: Number(v.slot_id), admin_reason: v.admin_reason }) });
+    if (out) table.refresh();
+  }
+
+  async function status(r) {
+    const out = await formDialog({ title: `Change status of #${r.reservation_id}`, intro: `Currently ${r.status}. Check-in and check-out are done on the staff pages.`,
+      fields: [{ name: "status", label: "New status", type: "select", options: [["Confirmed", "Confirmed"], ["No-show", "No-show"], ["Expired", "Expired"], ["Cancelled", "Cancelled"]].filter(([s]) => s !== r.status) },
+               { name: "admin_reason", label: "Reason (logged and sent to the customer)", required: true }],
+      submit: (v) => api.patch(`/admin/reservations/${r.reservation_id}`, v) });
+    if (out) table.refresh();
+  }
+
+  async function cancel(r) {
+    const out = await formDialog({ title: `Cancel #${r.reservation_id}?`, intro: `${r.vehicle.plate_number} · bay ${r.slot.slot_code} · ${fmtRange(r.start_time, r.end_time)}`,
+      fields: [{ name: "reason", label: "Reason (sent to the customer)", required: true }], submitText: "Cancel booking", danger: true,
+      submit: (v) => api.post(`/admin/reservations/${r.reservation_id}/cancel`, v) });
+    if (out) table.refresh();
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Users – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="toolbar" id="filters">
+      <input class="input" type="search" data-filter="q" placeholder="Search name, email or phone" aria-label="Search">
+      <select class="select" data-filter="role" aria-label="Role"><option value="">All roles</option><option>Customer</option><option>Staff</option><option>Admin</option></select>
+      <select class="select" data-filter="active" aria-label="Status"><option value="1">Active</option><option value="0">Deactivated</option><option value="all">Everyone</option></select>
+    </div>
+    <div id="table"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog, act, filterValues, onFilters } from "/js/admin.js";
+  import { html, icon, $, $$, confirmDialog } from "/js/ui.js";
+  import { fmtDate, fmtTime, ROLE_LABEL } from "/js/format.js";
+
+  const me = await adminPage({ active: "users", title: "Users", subtitle: "Customers sign up themselves. Only administrators create staff and admin accounts.",
+    actions: html`<button class="btn btn-primary" id="add">${icon("plus")} Add user</button>` });
+
+  const ROLE_TONE = { Admin: "bad", Staff: "info", Customer: "ok" };
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "Name", render: (u) => html`<div class="cell-main"><span class="avatar" style="width:34px;height:34px;font-size:13px">${(u.full_name || "?")[0]}</span><div><b>${u.full_name}</b><small>${u.email}</small></div></div>` },
+      { label: "Role", render: (u) => html`<span class="badge tone-${ROLE_TONE[u.role]}">${ROLE_LABEL[u.role]}</span>` },
+      { label: "Phone", render: (u) => u.phone || "–" },
+      { label: "Status", render: (u) => u.is_locked ? html`<span class="badge tone-warn">Locked until ${fmtTime(u.locked_until)}</span>`
+          : u.is_active ? html`<span class="badge tone-ok">Active</span>` : html`<span class="badge tone-mute">Deactivated</span>` },
+      { label: "Joined", render: (u) => fmtDate(u.created_at) },
+    ],
+    load: (page) => api.get("/admin/users", { page, per_page: 15, ...filterValues($("#filters")) }),
+    rowActions: (u) => [
+      u.is_locked ? html`<button class="btn btn-ghost btn-sm" data-unlock="${u.user_id}">Unlock</button>` : "",
+      html`<button class="btn btn-secondary btn-sm" data-edit="${u.user_id}">Edit</button>`,
+      u.user_id === me.user_id ? "" : u.is_active
+        ? html`<button class="btn btn-secondary btn-sm" data-off="${u.user_id}">Deactivate</button>`
+        : html`<button class="btn btn-secondary btn-sm" data-on="${u.user_id}">Reactivate</button>`,
+    ],
+    wire: (root) => {
+      const find = (id) => table.find(id, "user_id");
+      $$("[data-edit]", root).forEach((b) => b.onclick = () => edit(find(b.dataset.edit)));
+      $$("[data-unlock]", root).forEach((b) => b.onclick = async () => { await act(b, () => api.post(`/admin/users/${b.dataset.unlock}/unlock`), "Account unlocked."); table.refresh(); });
+      $$("[data-off]", root).forEach((b) => b.onclick = async () => {
+        const u = find(b.dataset.off);
+        if (!(await confirmDialog({ title: `Deactivate ${u.full_name}?`, message: "They can no longer log in. Their bookings and payments are kept (soft delete).", confirmText: "Deactivate", danger: true }))) return;
+        await act(b, () => api.del(`/admin/users/${u.user_id}`), "Account deactivated."); table.refresh();
+      });
+      $$("[data-on]", root).forEach((b) => b.onclick = async () => { await act(b, () => api.patch(`/admin/users/${b.dataset.on}`, { is_active: true }), "Account reactivated."); table.refresh(); });
+    },
+  });
+  onFilters($("#filters"), () => table.refresh(1));
+  table.refresh();
+
+  const roleOptions = [["Customer", "Customer"], ["Staff", "Staff"], ["Admin", "Administrator"]];
+  $("#add").onclick = async () => {
+    const u = await formDialog({ title: "Add a user", intro: "Create a staff or administrator account (customers can also sign up themselves).",
+      fields: [
+        { name: "full_name", label: "Full name", required: true },
+        { name: "email", label: "Email", type: "email", required: true },
+        { name: "phone", label: "Phone (optional)", placeholder: "0xxxxxxxxx" },
+        { name: "role", label: "Role", type: "select", options: roleOptions, value: "Staff" },
+        { name: "password", label: "First password", type: "password", required: true, hint: "At least 8 characters with a letter and a number. Share it with the person privately." },
+      ],
+      submitText: "Create account",
+      submit: (v) => api.post("/admin/users", { ...v, phone: v.phone || null }),
+    });
+    if (u) { table.refresh(1); }
+  };
+
+  async function edit(u) {
+    const out = await formDialog({ title: `Edit ${u.full_name}`, intro: u.email,
+      fields: [
+        { name: "full_name", label: "Full name", value: u.full_name, required: true },
+        { name: "phone", label: "Phone", value: u.phone || "" },
+        { name: "role", label: "Role", type: "select", options: roleOptions, value: u.role },
+        { name: "password", label: "New password (leave empty to keep)", type: "password" },
+      ],
+      submit: (v) => api.patch(`/admin/users/${u.user_id}`, { full_name: v.full_name, phone: v.phone || null, role: v.role, ...(v.password ? { password: v.password } : {}) }),
+    });
+    if (out) table.refresh();
+  }
+</script>
+</body>
+</html>

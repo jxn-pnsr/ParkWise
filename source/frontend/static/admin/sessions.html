@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Parking sessions – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="toolbar" id="filters">
+      <input class="input" type="search" data-filter="q" placeholder="Search plate" aria-label="Search plate">
+      <select class="select" data-filter="open" aria-label="Open sessions"><option value="">All sessions</option><option value="1">Still parked</option></select>
+      <span class="muted small push">MongoDB · Parking_Sessions (one document per visit, filled by the outbox)</span>
+    </div>
+    <div id="table"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog, act, filterValues, onFilters, toLocalInput, fromLocalInput } from "/js/admin.js";
+  import { html, icon, $, $$, confirmDialog } from "/js/ui.js";
+  import { fmtDateTime, fmtTime, fmtDuration, fmtMoney } from "/js/format.js";
+
+  await adminPage({ active: "sessions", title: "Parking sessions", subtitle: "Visit history stored in MongoDB. Created automatically at check-in/check-out; admins can add or correct entries.",
+    actions: html`<button class="btn btn-primary" id="add">${icon("plus")} Add session</button>` });
+
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "Plate", render: (s) => html`<b>${s.plateNumber}</b><span class="cell-sub">user #${s.userId}${s.reservationId ? ` · reservation #${s.reservationId}` : " · added by admin"}</span>` },
+      { label: "Bay", render: (s) => html`${s.slotCode || "–"}<span class="cell-sub">${s.lotName || ""}</span>` },
+      { label: "In", render: (s) => fmtDateTime(s.checkInAt) },
+      { label: "Out", render: (s) => s.checkOutAt ? fmtTime(s.checkOutAt) : html`<span class="badge tone-ok">Parked</span>` },
+      { label: "Duration", render: (s) => s.durationMinutes != null ? fmtDuration(s.durationMinutes) : "–" },
+      { label: "Fee", cls: "num", render: (s) => s.fees ? html`${fmtMoney(s.fees.total, 2)}${s.isOverstay ? html`<span class="cell-sub">overstay</span>` : ""}` : "–" },
+    ],
+    load: (page) => api.get("/admin/sessions", { page, per_page: 15, ...filterValues($("#filters")) }),
+    rowActions: (s) => [html`<button class="btn btn-secondary btn-sm" data-edit="${s.id}">Edit</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-del="${s.id}" aria-label="Delete">${icon("x", "icon icon-sm")}</button>`],
+    wire: (root) => {
+      const find = (id) => table.find(id, "id");
+      $$("[data-edit]", root).forEach((b) => b.onclick = () => edit(find(b.dataset.edit)));
+      $$("[data-del]", root).forEach((b) => b.onclick = async () => {
+        const s = find(b.dataset.del);
+        if (!(await confirmDialog({ title: `Delete the session for ${s.plateNumber}?`, message: "Removes this history entry from MongoDB. MySQL bookings are not touched.", confirmText: "Delete", danger: true }))) return;
+        await act(b, () => api.del(`/admin/sessions/${s.id}`), "Session deleted."); table.refresh();
+      });
+    },
+  });
+  onFilters($("#filters"), () => table.refresh(1));
+  table.refresh();
+
+  const fields = (s = {}) => [
+    { name: "userId", label: "Customer user id", type: "number", value: s.userId ?? "", required: true, min: 1 },
+    { name: "plateNumber", label: "Plate", value: s.plateNumber || "", required: true },
+    { name: "lotName", label: "Lot", value: s.lotName || "Lot A" },
+    { name: "slotCode", label: "Bay", value: s.slotCode || "" },
+    { name: "checkInAt", label: "Check-in (Bangkok time)", type: "datetime-local", value: toLocalInput(s.checkInAt), required: true },
+    { name: "checkOutAt", label: "Check-out (empty = still parked)", type: "datetime-local", value: toLocalInput(s.checkOutAt) },
+    { name: "base", label: "Parking fee", type: "number", value: s.fees?.base ?? "" },
+    { name: "overstay", label: "Overstay fee", type: "number", value: s.fees?.overstay ?? "" },
+  ];
+  const body = (v) => ({ userId: v.userId, plateNumber: v.plateNumber, lotName: v.lotName || undefined, slotCode: v.slotCode || undefined,
+    checkInAt: fromLocalInput(v.checkInAt), ...(v.checkOutAt ? { checkOutAt: fromLocalInput(v.checkOutAt) } : {}),
+    ...(v.base !== null || v.overstay !== null ? { fees: { base: v.base || 0, overstay: v.overstay || 0 } } : {}) });
+
+  $("#add").onclick = async () => {
+    if (await formDialog({ title: "Add a parking session", fields: fields(), submit: (v) => api.post("/admin/sessions", body(v)) })) table.refresh(1);
+  };
+  async function edit(s) {
+    if (await formDialog({ title: `Edit session · ${s.plateNumber}`, fields: fields(s), submit: (v) => api.patch(`/admin/sessions/${s.id}`, body(v)) })) table.refresh();
+  }
+</script>
+</body>
+</html>

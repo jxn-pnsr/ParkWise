@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Notifications – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="toolbar" id="filters">
+      <input class="input" type="search" data-filter="q" placeholder="Search title or message" aria-label="Search">
+      <select class="select" data-filter="type" aria-label="Type"><option value="">All types</option>
+        <option value="announcement">Announcement</option><option value="reservation_confirmed">Reservation confirmed</option>
+        <option value="reservation_cancelled">Reservation cancelled</option><option value="hold_expired">Hold expired</option>
+        <option value="no_show">No-show</option><option value="checkin_done">Checked in</option><option value="checkout_done">Checked out</option>
+        <option value="payment_paid">Payment received</option><option value="overstay">Overstay</option><option value="overstay_warning">Ending soon</option></select>
+      <input class="input" type="number" min="1" data-filter="user_id" placeholder="User id" aria-label="User id" style="min-width:110px;width:110px">
+      <span class="muted small push">MongoDB · Notifications</span>
+    </div>
+    <div id="table"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog, act, filterValues, onFilters } from "/js/admin.js";
+  import { html, icon, $, $$, toast } from "/js/ui.js";
+  import { fmtDateTime } from "/js/format.js";
+
+  await adminPage({ active: "notifications", title: "Notifications", subtitle: "Messages sent to customers. Send an announcement to everyone or to one person, edit a message, or delete it.",
+    actions: html`<button class="btn btn-primary" id="send">${icon("send")} Send announcement</button>` });
+
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "To", render: (n) => html`<span class="mono-sm">user #${n.userId}</span>` },
+      { label: "Message", render: (n) => html`<b>${n.title}</b><span class="cell-sub" style="max-width:520px;white-space:normal">${n.message}</span>` },
+      { label: "Type", render: (n) => html`<span class="badge ${n.type === "announcement" ? "tone-info" : "tone-mute"} plain">${n.type}</span>` },
+      { label: "Sent", render: (n) => fmtDateTime(n.sentAt) },
+      { label: "Read", render: (n) => n.isRead ? html`<span class="badge tone-ok plain">Read</span>` : html`<span class="badge tone-warn plain">Unread</span>` },
+    ],
+    load: (page) => api.get("/admin/notifications", { page, per_page: 15, ...filterValues($("#filters")) }),
+    rowActions: (n) => [
+      html`<button class="btn btn-secondary btn-sm" data-edit="${n.id}">Edit</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-del="${n.id}" aria-label="Delete">${icon("x", "icon icon-sm")}</button>`],
+    wire: (root) => {
+      $$("[data-edit]", root).forEach((b) => b.onclick = async () => {
+        const n = table.find(b.dataset.edit, "id");
+        const out = await formDialog({ title: "Edit notification", intro: `To user #${n.userId} · ${n.type}`,
+          fields: [{ name: "title", label: "Title", required: true, value: n.title },
+                   { name: "message", label: "Message", type: "textarea", required: true, value: n.message },
+                   { name: "isRead", label: "Marked as read", type: "checkbox", value: n.isRead }],
+          submit: (v) => api.patch(`/admin/notifications/${n.id}`, { title: v.title, message: v.message, isRead: v.isRead }) });
+        if (out) { toast("Notification updated."); table.refresh(); }
+      });
+      $$("[data-del]", root).forEach((b) => b.onclick = async () => {
+        await act(b, () => api.del(`/admin/notifications/${b.dataset.del}`), "Notification deleted."); table.refresh();
+      });
+    },
+  });
+  onFilters($("#filters"), () => table.refresh(1));
+  table.refresh();
+
+  $("#send").onclick = async () => {
+    const out = await formDialog({ title: "Send an announcement", intro: "Leave the user id empty to send it to every active customer.",
+      fields: [{ name: "title", label: "Title", required: true, placeholder: "e.g. Lot B closed on Sunday" },
+               { name: "message", label: "Message", type: "textarea", required: true },
+               { name: "user_id", label: "Only to user id (optional)", type: "number", min: 1 }],
+      submitText: "Send",
+      submit: (v) => api.post("/admin/notifications", { title: v.title, message: v.message, ...(v.user_id ? { user_id: v.user_id } : {}) }) });
+    if (out) { toast(`Sent to ${out.sent} ${out.sent === 1 ? "person" : "people"}.`); table.refresh(1); }
+  };
+</script>
+</body>
+</html>

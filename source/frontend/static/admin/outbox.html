@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Integration outbox – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="dash-stats" id="counts"></section>
+  <section class="panel">
+    <div class="toolbar" id="filters">
+      <select class="select" data-filter="status" id="status" aria-label="Status"><option value="">All statuses</option><option value="Pending">Queued</option><option value="Sent">Sent</option><option value="Failed">Failed</option></select>
+      <input class="input" type="search" data-filter="event_type" placeholder="Event type, e.g. checkout" aria-label="Event type">
+      <span class="push flex">
+        <button class="btn btn-secondary btn-sm" id="process">Send queued now</button>
+        <button class="btn btn-primary btn-sm" id="retry-all">Retry all failed</button>
+        <button class="btn btn-secondary btn-sm" id="purge">Delete sent (older than 7 days)</button>
+      </span>
+    </div>
+    <div id="table"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, act, filterValues, onFilters } from "/js/admin.js";
+  import { html, icon, render, $, $$, confirmDialog, outboxBadge, getParam } from "/js/ui.js";
+  import { fmtDateTime } from "/js/format.js";
+  import { infoDialog } from "/js/staff.js";
+
+  await adminPage({ active: "outbox", title: "Integration outbox", subtitle: "Events written by MySQL transactions, waiting to be copied to MongoDB. Sent every 5 seconds. While MongoDB is down, events just wait. An event that itself fails 5 times stops and waits for Retry." });
+  $("#process").textContent = "Send queued now";
+  if (getParam("status")) $("#status").value = getParam("status");
+
+  let counts = {};
+  function drawCounts() {
+    render($("#counts"), html`
+      <article class="dash-stat"><div class="dash-stat-label">${icon("clock")}<span>Queued</span></div><div class="dash-stat-value">${counts.Pending || 0}</div><div class="dash-stat-sub">waiting for MongoDB</div></article>
+      <article class="dash-stat"><div class="dash-stat-label">${icon("circle-check")}<span>Sent</span></div><div class="dash-stat-value green">${counts.Sent || 0}</div><div class="dash-stat-sub">copied to MongoDB</div></article>
+      <article class="dash-stat"><div class="dash-stat-label">${icon("triangle-alert")}<span>Failed</span></div><div class="dash-stat-value ${counts.Failed ? "bad" : ""}">${counts.Failed || 0}</div><div class="dash-stat-sub">need Retry</div></article>`);
+  }
+
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "#", render: (e) => html`<span class="mono-sm">${e.seq}</span>` },
+      { label: "Event", render: (e) => html`<b class="mono-sm">${e.event_type}</b><span class="cell-sub">${e.aggregate_id ? `id ${e.aggregate_id}` : ""}</span>` },
+      { label: "Status", render: (e) => html`${outboxBadge(e.status)}${e.retry_count ? html`<span class="cell-sub">${e.retry_count} tries</span>` : ""}` },
+      { label: "Created", render: (e) => fmtDateTime(e.created_at) },
+      { label: "Sent", render: (e) => e.sent_at ? fmtDateTime(e.sent_at) : "–" },
+      { label: "Last error", render: (e) => e.last_error ? html`<span class="small" style="color:#b93c29">${e.last_error.slice(0, 80)}</span>` : "–" },
+    ],
+    load: async (page) => { const r = await api.get("/admin/outbox", { page, per_page: 20, ...filterValues($("#filters")) }); counts = r.counts; drawCounts(); return r; },
+    rowActions: (e) => [html`<button class="btn btn-ghost btn-sm" data-view="${e.event_id}">Payload</button>`,
+      e.status === "Failed" ? html`<button class="btn btn-primary btn-sm" data-retry="${e.event_id}">Retry</button>` : "",
+      e.status === "Sent" ? html`<button class="btn btn-secondary btn-sm" data-del="${e.event_id}" aria-label="Delete">${icon("x", "icon icon-sm")}</button>` : ""],
+    wire: (root) => {
+      const find = (id) => table.find(id, "event_id");
+      $$("[data-view]", root).forEach((b) => b.onclick = () => { const e = find(b.dataset.view); infoDialog(e.event_type, html`<p class="mono-sm">${e.event_id}</p><pre class="json mt-1">${JSON.stringify(e.payload, null, 2)}</pre>`, { button: "Close" }); });
+      $$("[data-retry]", root).forEach((b) => b.onclick = async () => { await act(b, () => api.post(`/admin/outbox/${b.dataset.retry}/retry`), (r) => r.sent ? "Sent to MongoDB." : "Queued again (MongoDB still unavailable)."); table.refresh(); });
+      $$("[data-del]", root).forEach((b) => b.onclick = async () => { await act(b, () => api.del(`/admin/outbox/${b.dataset.del}`), "Event deleted."); table.refresh(); });
+    },
+  });
+  onFilters($("#filters"), () => table.refresh(1));
+  table.refresh();
+
+  $("#process").onclick = async (e) => { await act(e.currentTarget, () => api.post("/admin/outbox/process"), (r) => `${r.sent} sent, ${r.failed} failed.`); table.refresh(); };
+  $("#retry-all").onclick = async (e) => { await act(e.currentTarget, () => api.post("/admin/outbox/retry-failed"), (r) => `${r.retried} queued again, ${r.sent} sent.`); table.refresh(); };
+  $("#purge").onclick = async (e) => {
+    if (!(await confirmDialog({ title: "Delete old sent events?", message: "Housekeeping: removes Sent events older than 7 days. MongoDB already has their data.", confirmText: "Delete" }))) return;
+    await act(e.currentTarget, () => api.del("/admin/outbox?older_than_days=7"), (r) => `${r.deleted} deleted.`); table.refresh();
+  };
+  setInterval(() => table.refresh(), 15000);
+</script>
+</body>
+</html>

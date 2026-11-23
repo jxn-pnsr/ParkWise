@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transaction demo – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <div class="demo-banner"><svg class="icon"><use href="/vendor/icons/sprite.svg#flask-conical"/></svg>
+    <span><b>Demo mode.</b> These buttons run real transactions on the database and show the rows read before and after.
+    Run <code>python database/reset_demo.py</code> to start again with fresh data.</span></div>
+
+  <div class="stack-gap">
+    <section class="panel scenario">
+      <div class="scenario-head"><span class="num-badge">1</span><div><h2>Check-out succeeds (COMMIT)</h2>
+        <p>One transaction: lock bay + reservation → reservation Completed → work out fee → INSERT payment → INSERT outbox event → COMMIT.</p></div></div>
+      <div class="toolbar"><select class="select" id="s1-res" aria-label="Parked car"></select><button class="btn btn-primary" id="s1-run">Run check-out</button></div>
+      <div id="s1-out"></div>
+    </section>
+
+    <section class="panel scenario">
+      <div class="scenario-head"><span class="num-badge">2</span><div><h2>Double booking is refused</h2>
+        <p>Several customers press "Hold" on the same bay for the same time at the same instant. SELECT … FOR UPDATE makes them wait in line: the first wins, the rest are refused, and only one row is added.</p></div></div>
+      <div class="toolbar"><select class="select" id="s2-bay" aria-label="Bay"></select>
+        <select class="select" id="s2-n" aria-label="Customers"><option value="2">2 customers</option><option value="4">4 customers</option><option value="8" selected>8 customers</option></select>
+        <button class="btn btn-primary" id="s2-run">Book at the same time</button></div>
+      <div id="s2-out"></div>
+    </section>
+
+    <section class="panel scenario">
+      <div class="scenario-head"><span class="num-badge">3</span><div><h2>Error half-way: ROLLBACK</h2>
+        <p>Same check-out, but a failure is forced after the reservation is updated and before the payment is created. Every step is undone: the rows read after are identical to the rows read before.</p></div></div>
+      <div class="toolbar"><select class="select" id="s3-res" aria-label="Parked car"></select><button class="btn btn-danger" id="s3-run">Run with a forced error</button></div>
+      <div id="s3-out"></div>
+    </section>
+
+    <section class="panel scenario">
+      <div class="scenario-head"><span class="num-badge">4</span><div><h2>MongoDB down: outbox keeps events, Retry sends them once</h2>
+        <p>1. Switch MongoDB off · 2. Do something (scenario 1, or a booking) · 3. "Send queued now": events stay Pending (they wait, however long MongoDB is off; nothing is lost) · 4. Switch MongoDB on · 5. Retry: everything arrives once.</p></div></div>
+      <div class="toolbar">
+        <button class="btn btn-danger" id="s4-off">Switch MongoDB off</button>
+        <button class="btn btn-primary" id="s4-on">Switch MongoDB on</button>
+        <button class="btn btn-secondary" id="s4-send">Send queued now</button>
+        <button class="btn btn-primary" id="s4-retry">Retry + send</button>
+        <button class="btn btn-outline push" id="jobs">Run background jobs now</button>
+      </div>
+      <div id="s4-out"></div>
+    </section>
+  </div>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, act } from "/js/admin.js";
+  import { html, render, $, toast, outboxBadge } from "/js/ui.js";
+  import { fmtDateTime, fmtTime, fmtMoney } from "/js/format.js";
+
+  await adminPage({ active: "demo", title: "Transaction demo", subtitle: "Proof that bookings, check-out and the MySQL → MongoDB sync are safe. Each scenario shows the database before and after." });
+
+  const show = (v) => v === null || v === undefined ? "NULL" : typeof v === "string" && /\dT\d.*Z$/.test(v) ? fmtDateTime(v) : String(v);
+
+  /** Field-by-field table of one row before and after; changed fields are highlighted */
+  function compare(title, before, after) {
+    const keys = [...new Set([...Object.keys(before || {}), ...Object.keys(after || {})])];
+    if (!keys.length) return html`<div><h4>${title}</h4><p class="muted small">No row (NULL) before and after.</p></div>`;
+    return html`<div><h4>${title}</h4><div class="table-wrap"><table class="table"><thead><tr><th>Column</th><th>Before</th><th>After</th></tr></thead>
+      <tbody>${keys.map((k) => { const a = show(before?.[k]), b = show(after?.[k]);
+        return html`<tr class="${a !== b ? "changed" : ""}"><td class="mono-sm">${k}</td><td>${a}</td><td>${b}</td></tr>`; })}</tbody></table></div></div>`;
+  }
+
+  async function loadCandidates() {
+    let d;
+    try { d = await api.get("/admin/demo"); }
+    catch (err) {
+      if (err.code === "DEMO_MODE_OFF") {
+        // The server runs without DEMO_MODE every demo button would answer 404.
+        document.querySelectorAll("main button").forEach((b) => (b.disabled = true));
+        toast("The Transaction Demo is turned off on this server. Set DEMO_MODE=1 in backend/.env and restart.", "error", 12000);
+        return;
+      }
+      throw err;
+    }
+    const parked = d.parked.length ? d.parked.map((p) => html`<option value="${p.reservation_id}">#${p.reservation_id} · ${p.plate_number} in ${p.slot_code} (${p.lot_name})</option>`)
+      : html`<option value="">No parked car: check one in on the staff pages first</option>`;
+    const keep1 = $("#s1-res").value, keep3 = $("#s3-res").value;   // keep the user's choice across refreshes
+    render($("#s1-res"), parked);
+    render($("#s3-res"), parked);
+    if (keep1) $("#s1-res").value = keep1;
+    if (keep3) $("#s3-res").value = keep3;
+    if (!$("#s2-bay").options.length) render($("#s2-bay"), d.bays.map((b) => html`<option value="${b.slot_id}">${b.slot_code} · ${b.lot_name}</option>`));
+    drawMongo(d);
+  }
+
+  function drawMongo(d) {
+    render($("#s4-out"), html`<div class="before-after">
+      <div class="health">
+        <div><span>MongoDB</span><span class="badge ${d.mongo_ok ? "tone-ok" : "tone-bad"}">${d.mongo_ok ? "Online" : d.simulated_down ? "Off (simulated)" : "Down"}</span></div>
+        <div><span>Outbox queued</span><b>${d.outbox.Pending}</b></div>
+        <div><span>Outbox failed</span><b style="color:${d.outbox.Failed ? "#b93c29" : "inherit"}">${d.outbox.Failed}</b></div>
+        <div><span>Outbox sent</span><b>${d.outbox.Sent}</b></div>
+      </div>
+      <div><h4>Latest events</h4><div class="table-wrap"><table class="table"><tbody>${d.latest.map((e) => html`<tr>
+        <td class="mono-sm">${e.event_type}</td><td>${outboxBadge(e.status)}${e.retry_count ? html`<span class="cell-sub">${e.retry_count} tries</span>` : ""}</td><td class="small muted">${fmtTime(e.created_at)}</td></tr>`)}</tbody></table></div></div>
+    </div>`);
+  }
+
+  $("#s1-run").onclick = async (e) => {
+    const id = Number($("#s1-res").value);
+    if (!id) return toast("No parked car to check out.", "info");
+    const r = await act(e.currentTarget, () => api.post("/admin/demo/checkout-success", { reservation_id: id }), "Committed.");
+    if (!r) return;
+    render($("#s1-out"), html`<p><span class="result-tag commit">COMMIT</span> · fee ${fmtMoney(r.fee.total_amount, 2)} (parking ${fmtMoney(r.fee.base_fee)} + overstay ${fmtMoney(r.fee.overstay_fee)})</p>
+      <div class="before-after mt-1">${compare("Reservations row", r.before.reservation, r.after.reservation)}${compare("Payments row", r.before.payment, r.after.payment)}</div>`);
+    loadCandidates();
+  };
+
+  $("#s2-run").onclick = async (e) => {
+    const r = await act(e.currentTarget, () => api.post("/admin/demo/double-booking", { slot_id: Number($("#s2-bay").value), attempts: Number($("#s2-n").value) }));
+    if (!r) return;
+    render($("#s2-out"), html`<p><b>${r.attempts.filter((a) => a.outcome === "HELD").length}</b> booking succeeded, <b>${r.attempts.filter((a) => a.outcome === "REJECTED").length}</b> refused ·
+        rows for this bay: ${r.rows_before} → ${r.rows_after} (<b>+${r.new_rows}</b>) · window ${fmtDateTime(r.window_start)}</p>
+      <div class="table-wrap mt-1"><table class="table"><thead><tr><th>Customer</th><th>Plate</th><th>Result</th><th>Why</th></tr></thead>
+      <tbody>${r.attempts.map((a) => html`<tr class="${a.outcome === "HELD" ? "changed" : ""}"><td>${a.customer}</td><td>${a.plate}</td>
+        <td>${a.outcome === "HELD" ? html`<span class="badge tone-ok">Held #${a.reservation_id}</span>` : html`<span class="badge tone-bad">Refused</span>`}</td>
+        <td class="small">${a.outcome === "HELD" ? "got the lock first" : `${a.code}: ${a.message}`}</td></tr>`)}</tbody></table></div>
+      <p class="hint mt-1">The winning hold is cancelled automatically afterwards so you can run this again.</p>`);
+  };
+
+  $("#s3-run").onclick = async (e) => {
+    const id = Number($("#s3-res").value);
+    if (!id) return toast("No parked car to use.", "info");
+    const r = await act(e.currentTarget, () => api.post("/admin/demo/midway-rollback", { reservation_id: id }));
+    if (!r) return;
+    render($("#s3-out"), html`<p><span class="result-tag rollback">ROLLBACK</span> · ${r.error}</p>
+      <p class="mt-1">${r.unchanged ? html`<span class="badge tone-ok">Nothing changed</span> before and after are identical (payments ${r.before.payments_total} → ${r.after.payments_total}, outbox ${r.before.outbox_total} → ${r.after.outbox_total}).`
+        : html`<span class="badge tone-bad">Data changed</span>`}</p>
+      <div class="before-after mt-1">${compare("Reservations row", r.before.reservation, r.after.reservation)}${compare("Payments row", r.before.payment, r.after.payment)}</div>
+      <ol class="steps-list mt-1">${r.steps.map((s) => html`<li>${s}</li>`)}</ol>`);
+    loadCandidates();
+  };
+
+  $("#s4-off").onclick = async (e) => { const d = await act(e.currentTarget, () => api.post("/admin/demo/mongo-down", { enabled: true }), "MongoDB is now off (simulated)."); if (d) drawMongo(d); };
+  $("#s4-on").onclick = async (e) => { const d = await act(e.currentTarget, () => api.post("/admin/demo/mongo-down", { enabled: false }), "MongoDB is back."); if (d) drawMongo(d); };
+  $("#s4-send").onclick = async (e) => { await act(e.currentTarget, () => api.post("/admin/outbox/process"), (r) => r.waiting ? `MongoDB is off: ${r.sent} sent, the queue waits.` : `${r.sent} sent, ${r.failed} failed.`); loadCandidates(); };
+  $("#s4-retry").onclick = async (e) => { const d = await act(e.currentTarget, () => api.post("/admin/demo/mongo-retry"), (r) => `${r.retried} retried, ${r.sent} sent.`); if (d) drawMongo(d); };
+  $("#jobs").onclick = async (e) => { await act(e.currentTarget, () => api.post("/admin/demo/run-jobs"), (r) => `Expired ${r.expired}, no-show ${r.no_show}, overstay ${r.overstay}, outbox sent ${r.outbox.sent}.`); loadCandidates(); };
+
+  loadCandidates();
+  setInterval(loadCandidates, 10000);
+</script>
+</body>
+</html>

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lots and bays – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="panel-head"><h2>Parking lots</h2></div>
+    <div id="lots"></div>
+  </section>
+  <section class="panel mt-3">
+    <div class="panel-head">
+      <h2 id="bays-title">Bays</h2>
+      <div class="flex"><select class="select" id="lot-pick" aria-label="Lot" style="width:200px"></select>
+        <button class="btn btn-primary btn-sm" id="add-bay">Add bay</button></div>
+    </div>
+    <div id="map" class="mb-2"></div>
+    <div id="bays" class="mt-3"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog, act } from "/js/admin.js";
+  import { html, icon, render, $, $$, toast, confirmDialog } from "/js/ui.js";
+  import { fmtTime, fmtRange } from "/js/format.js";
+  import { renderBayMap } from "/js/baymap.js";
+  import { BAY_NOTE } from "/js/baymap.js";
+
+  await adminPage({ active: "lots", title: "Lots and bays", subtitle: "Open, close and edit lots; add bays, mark EV chargers and close bays for maintenance.",
+    actions: html`<button class="btn btn-primary" id="add-lot">${icon("plus")} Add lot</button>` });
+  render($("#add-bay"), html`${icon("plus", "icon icon-sm")} Add bay`);
+
+  let lotId = null;
+  const blockedMsg = (err) => err.extra?.reservations?.length
+    ? `${err.message} (${err.extra.reservations.map((r) => `#${r.reservation_id} ${r.slot_code} ${fmtRange(r.start_time, r.end_time)}`).join("; ")})` : err.message;
+
+  const lots = dataTable($("#lots"), {
+    columns: [
+      { label: "Lot", render: (l) => html`<b>${l.lot_name}</b><span class="cell-sub">${l.location_desc || ""}</span>` },
+      { label: "Bays", cls: "num", render: (l) => l.total_slots },
+      { label: "Free now", cls: "num", render: (l) => html`<b style="color:#2C6B4A">${l.available_slots}</b>` },
+      { label: "Parked", cls: "num", render: (l) => l.counts.Occupied },
+      { label: "Closed bays", cls: "num", render: (l) => l.counts.Maintenance },
+      { label: "Status", render: (l) => l.is_active ? html`<span class="badge tone-ok">Open</span>` : html`<span class="badge tone-mute">Closed</span>` },
+    ],
+    load: async () => {
+      const list = await api.get("/admin/lots");
+      if (!lotId && list.length) lotId = list[0].lot_id;
+      render($("#lot-pick"), list.map((l) => html`<option value="${l.lot_id}" ${l.lot_id === lotId ? "selected" : ""}>${l.lot_name}</option>`));
+      return list;
+    },
+    rowActions: (l) => [
+      html`<button class="btn btn-secondary btn-sm" data-edit="${l.lot_id}">Edit</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-toggle="${l.lot_id}">${l.is_active ? "Close" : "Open"}</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-del="${l.lot_id}" aria-label="Delete">${icon("x", "icon icon-sm")}</button>`],
+    wire: (root) => {
+      const find = (id) => lots.find(id, "lot_id");
+      $$("[data-edit]", root).forEach((b) => b.onclick = () => editLot(find(b.dataset.edit)));
+      $$("[data-toggle]", root).forEach((b) => b.onclick = async () => {
+        const l = find(b.dataset.toggle);
+        try { await api.patch(`/admin/lots/${l.lot_id}`, { is_active: !l.is_active }); toast(`${l.lot_name} is now ${l.is_active ? "closed" : "open"}.`); lots.refresh(); }
+        catch (err) { toast(blockedMsg(err), "error", 9000); }
+      });
+      $$("[data-del]", root).forEach((b) => b.onclick = async () => {
+        const l = find(b.dataset.del);
+        if (!(await confirmDialog({ title: `Delete ${l.lot_name}?`, message: "Only possible if no booking ever used it. Otherwise close it instead.", confirmText: "Delete", danger: true }))) return;
+        if (await act(b, () => api.del(`/admin/lots/${l.lot_id}`), "Lot deleted.") !== undefined) { lotId = null; lots.refresh(); loadBays(); }
+      });
+    },
+  });
+
+  async function editLot(l) {
+    const out = await formDialog({ title: l ? `Edit ${l.lot_name}` : "Add a lot",
+      fields: [{ name: "lot_name", label: "Name", value: l?.lot_name, required: true },
+               { name: "location_desc", label: "Where is it?", value: l?.location_desc || "", type: "textarea" }],
+      submit: (v) => l ? api.patch(`/admin/lots/${l.lot_id}`, v) : api.post("/admin/lots", v) });
+    if (out) { if (!l) lotId = out.lot_id; await lots.refresh(); loadBays(); }
+  }
+  $("#add-lot").onclick = () => editLot(null);
+
+  // bays of the chosen lot
+  const CLS = { Available: "tone-ok", Occupied: "tone-info", Reserved: "tone-bad", Held: "tone-warn", Maintenance: "tone-mute" };
+  const bays = dataTable($("#bays"), {
+    columns: [
+      { label: "Bay", render: (s) => html`<b>${s.slot_code}</b>${s.slot_type === "EV" ? html` ${icon("zap", "icon icon-sm")} <span class="cell-sub">EV charger</span>` : ""}` },
+      { label: "Setting", render: (s) => s.slot_status === "Active" ? "Open" : html`<span class="badge tone-mute">Maintenance</span>` },
+      { label: "Right now", render: (s) => html`<span class="badge ${CLS[s.display_status] || "tone-mute"}">${BAY_NOTE[s.display_status] || "–"}</span>${s.plate_number ? html`<span class="cell-sub">${s.plate_number}${s.busy_until ? ` until ${fmtTime(s.busy_until)}` : ""}</span>` : ""}` },
+      { label: "Bookings (all time)", cls: "num", render: (s) => s.bookings },
+    ],
+    load: async () => {
+      if (!lotId) return [];
+      const [list, live] = await Promise.all([api.get(`/admin/lots/${lotId}/slots`), api.get(`/lots/${lotId}/slots`).catch(() => null)]);
+      if (live) renderBayMap($("#map"), { slots: live.slots, lotName: live.lot.lot_name, showPlates: true, legend: true });
+      else render($("#map"), html`<p class="muted">This lot is closed.</p>`);
+      return list;
+    },
+    rowActions: (s) => [
+      html`<button class="btn btn-secondary btn-sm" data-edit="${s.slot_id}">Edit</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-maint="${s.slot_id}">${s.slot_status === "Active" ? "Close for maintenance" : "Reopen"}</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-del="${s.slot_id}" aria-label="Delete">${icon("x", "icon icon-sm")}</button>`],
+    wire: (root) => {
+      const find = (id) => bays.find(id, "slot_id");
+      $$("[data-edit]", root).forEach((b) => b.onclick = () => editBay(find(b.dataset.edit)));
+      $$("[data-maint]", root).forEach((b) => b.onclick = async () => {
+        const s = find(b.dataset.maint);
+        try {
+          await api.patch(`/admin/slots/${s.slot_id}`, { slot_status: s.slot_status === "Active" ? "Maintenance" : "Active" });
+          toast(`Bay ${s.slot_code} ${s.slot_status === "Active" ? "closed" : "reopened"}.`); bays.refresh(); lots.refresh();
+        } catch (err) { toast(blockedMsg(err), "error", 9000); }
+      });
+      $$("[data-del]", root).forEach((b) => b.onclick = async () => {
+        const s = find(b.dataset.del);
+        if (!(await confirmDialog({ title: `Delete bay ${s.slot_code}?`, message: s.bookings ? "It has booking history, so it will be hidden (soft delete) instead of erased." : "It has never been booked and will be removed.", confirmText: "Delete", danger: true }))) return;
+        try { const r = await api.del(`/admin/slots/${s.slot_id}`); toast(r.delete === "soft" ? "Bay hidden (soft delete)." : "Bay deleted."); bays.refresh(); lots.refresh(); }
+        catch (err) { toast(blockedMsg(err), "error", 9000); }
+      });
+    },
+  });
+  function loadBays() { $("#bays-title").textContent = `Bays in ${$("#lot-pick").selectedOptions[0]?.textContent || "–"}`; bays.refresh(); }
+  $("#lot-pick").onchange = (e) => { lotId = Number(e.target.value); loadBays(); };
+
+  async function editBay(s) {
+    const out = await formDialog({ title: s ? `Edit bay ${s.slot_code}` : "Add a bay",
+      fields: [{ name: "slot_code", label: "Bay code", value: s?.slot_code || "", required: true, hint: "Unique inside the lot, e.g. A11" },
+               { name: "slot_type", label: "Type", type: "select", options: [["Standard", "Standard"], ["EV", "EV charger"]], value: s?.slot_type || "Standard" }],
+      submit: (v) => s ? api.patch(`/admin/slots/${s.slot_id}`, v) : api.post("/admin/slots", { ...v, lot_id: lotId }) });
+    if (out) { bays.refresh(); lots.refresh(); }
+  }
+  $("#add-bay").onclick = () => lotId ? editBay(null) : toast("Add a lot first.", "info");
+
+  await lots.refresh();
+  loadBays();
+</script>
+</body>
+</html>

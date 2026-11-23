@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Activity log – ParkWise</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+<main id="page" hidden>
+  <div class="page-head" id="head"></div>
+  <section class="panel">
+    <div class="toolbar" id="filters">
+      <select class="select" data-filter="action_type" id="types" aria-label="Action"><option value="">All actions</option></select>
+      <select class="select" data-filter="role" aria-label="Role"><option value="">All roles</option><option>Customer</option><option>Staff</option><option>Admin</option><option>System</option><option>Anonymous</option></select>
+      <input class="input" type="number" min="1" data-filter="user_id" placeholder="User id" aria-label="User id" style="min-width:110px;width:110px">
+      <input class="input" type="date" data-filter="from" aria-label="From">
+      <select class="select" data-filter="archived" aria-label="Archived"><option value="0">Not archived</option><option value="1">Archived</option><option value="all">Both</option></select>
+      <span class="muted small push">MongoDB · Activity_Logs</span>
+    </div>
+    <div id="table"></div>
+  </section>
+</main>
+<script type="module">
+  import { api } from "/js/api.js";
+  import { adminPage, dataTable, formDialog, act, filterValues, onFilters } from "/js/admin.js";
+  import { html, icon, render, $, $$, confirmDialog, toast } from "/js/ui.js";
+  import { fmtDateTime } from "/js/format.js";
+  import { infoDialog } from "/js/staff.js";
+
+  await adminPage({ active: "logs", title: "Activity log", subtitle: "Everything that happened, written automatically. You can add a manual entry, add a note or archive an entry; what a log recorded is never edited or removed.",
+    actions: html`<button class="btn btn-primary" id="add-log">${icon("plus")} Add log entry</button>` });
+
+  try {
+    const types = await api.get("/admin/logs/action-types");
+    render($("#types"), html`<option value="">All actions</option>${types.map((t) => html`<option>${t}</option>`)}`);
+  } catch { /* MongoDB down the table below shows the message */ }
+
+  const ROLE_TONE = { Admin: "bad", Staff: "info", Customer: "ok", System: "mute", Anonymous: "warn" };
+  const table = dataTable($("#table"), {
+    columns: [
+      { label: "When", render: (l) => fmtDateTime(l.timestamp) },
+      { label: "Action", render: (l) => html`<b class="mono-sm">${l.action_type}</b><span class="cell-sub">${l.entity_type || ""}${l.entity_id != null ? ` #${l.entity_id}` : ""}</span>` },
+      { label: "By", render: (l) => html`<span class="badge tone-${ROLE_TONE[l.role] || "mute"} plain">${l.role}</span>${l.userId ? html`<span class="cell-sub">user #${l.userId}</span>` : ""}` },
+      { label: "IP", render: (l) => html`<span class="mono-sm">${l.ip_address || "–"}</span>` },
+      { label: "Admin note", render: (l) => l.admin_note ? html`<span class="small">${l.admin_note}</span>` : html`<span class="subtle">–</span>` },
+    ],
+    load: (page) => {
+      const f = filterValues($("#filters"));
+      if (f.from) f.from = `${f.from}T00:00:00+07:00`;
+      return api.get("/admin/logs", { page, per_page: 20, ...f });
+    },
+    rowActions: (l) => [
+      html`<button class="btn btn-ghost btn-sm" data-view="${l.id}">Details</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-note="${l.id}">Note</button>`,
+      html`<button class="btn btn-secondary btn-sm" data-arch="${l.id}">${l.is_archived ? "Unarchive" : "Archive"}</button>`],
+    wire: (root) => {
+      const find = (id) => table.find(id, "id");
+      $$("[data-view]", root).forEach((b) => b.onclick = () => {
+        const l = find(b.dataset.view);
+        infoDialog(l.action_type, html`<pre class="json">${JSON.stringify({ ...l, id: undefined }, null, 2)}</pre>`, { button: "Close" });
+      });
+      $$("[data-note]", root).forEach((b) => b.onclick = async () => {
+        const l = find(b.dataset.note);
+        if (await formDialog({ title: "Admin note", intro: `${l.action_type} · ${fmtDateTime(l.timestamp)}`,
+          fields: [{ name: "admin_note", label: "Note", type: "textarea", value: l.admin_note || "" }],
+          submit: (v) => api.patch(`/admin/logs/${l.id}`, { admin_note: v.admin_note || null }) })) table.refresh();
+      });
+      $$("[data-arch]", root).forEach((b) => b.onclick = async () => {
+        const l = find(b.dataset.arch);
+        await act(b, () => api.patch(`/admin/logs/${l.id}`, { is_archived: !l.is_archived }), l.is_archived ? "Unarchived." : "Archived."); table.refresh();
+      });
+    },
+  });
+  onFilters($("#filters"), () => table.refresh(1));
+  table.refresh();
+
+  $("#add-log").onclick = async () => {
+    const out = await formDialog({ title: "Add log entry", intro: "Saved as an Admin entry. The action is stored with the prefix manual.",
+      fields: [{ name: "action_type", label: "Action", required: true, placeholder: "e.g. lot-b.inspection", hint: "Letters, numbers, dot, dash or underscore." },
+               { name: "message", label: "Message", type: "textarea", required: true },
+               { name: "entity_type", label: "About (optional)", placeholder: "e.g. reservation" },
+               { name: "entity_id", label: "Id (optional)", placeholder: "e.g. 12" }],
+      submitText: "Add entry",
+      submit: (v) => api.post("/admin/logs", { action_type: v.action_type, message: v.message,
+        ...(v.entity_type ? { entity_type: v.entity_type } : {}), ...(v.entity_id ? { entity_id: v.entity_id } : {}) }) });
+    if (out) { toast("Log entry added."); table.refresh(1); }
+  };
+</script>
+</body>
+</html>
