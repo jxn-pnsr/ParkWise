@@ -66,6 +66,10 @@ def start(app):
     return _scheduler
 
 
+def is_running():
+    return bool(_scheduler and _scheduler.running)
+
+
 def status():
     if not _scheduler:
         return {"running": False, "jobs": []}
