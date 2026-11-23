@@ -144,5 +144,5 @@ def create_app(config_class=Config):
 
 if __name__ == "__main__":
     application = create_app()
-    application.run(host="127.0.0.1", port=int(os.getenv("PORT", "5000")),
+    application.run(host="127.0.0.1", port=int(os.getenv("PORT", "5050")),
                     debug=application.config.get("DEBUG", False))
