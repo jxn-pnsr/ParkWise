@@ -230,7 +230,7 @@ def cancel(user, reservation_id, reason=None, by_admin=False, notify=True):
                     "cancel_reason = %s, updated_at = %s WHERE reservation_id = %s",
                     (now, user["user_id"], reason, now, reservation_id))
         who = "an administrator" if by_admin else "you"
-        messeage = None
+        message = None
         if notify:
             message = notification("reservation_cancelled", "Reservation cancelled",
                                    f"Your booking for bay {r['slot_code']} on {fmt_bkk(r['start_time'])} "
