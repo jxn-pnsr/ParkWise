@@ -42,16 +42,52 @@ def test_worker_sends_pending_events_once(app, fresh_db, mongo, api):
 def test_mongo_down_then_retry(app, fresh_db, mongo):
     """Transaction demo scenario 4: Mongo down -> events wait -> Failed after 5 tries -> Retry -> Sent."""
     from services import mongo_sync
+    pending_before = outbox(app, "Pending")
     mongo_mod.set_simulated_down(True)
     with app.app_context():
-        for _ in range(mongo_sync.MAX_RETRIES):
-            mongo_sync.process_pending()
-    assert outbox(app, "Failed") >= 2                   # seed already had 1 Failed
+        for _ in range(mongo_sync.MAX_RETRIES * 4):     # an outage much longer than 5 rounds
+            r = mongo_sync.process_pending()
+            assert r["sent"] == 0 and r["failed"] == 0 and r["waiting"] == 1
+        from db.mysql import fetch_value
+        assert fetch_value("SELECT MAX(retry_count) FROM Integration_Outbox WHERE status = 'Pending'") == 0
+    assert outbox(app, "Failed") == 1                   # only the seed's own Failed row
+    assert outbox(app, "Pending") == pending_before     # nothing lost
     mongo_mod.set_simulated_down(False)
     with app.app_context():
-        assert mongo_sync.retry() >= 2
+        assert mongo_sync.retry() == 1                  
         result = mongo_sync.process_pending()
     assert result["failed"] == 0 and outbox(app, "Failed") == 0 and outbox(app, "Pending") == 0
+
+
+def test_poison_event_does_not_block_the_queue(app, fresh_db, mongo, monkeypatch):
+    """An event with an error is retried and marked as Failed, while other events are still sent."""
+    from services import mongo_sync
+    from db.mysql import fetch_one
+    from db.mysql import transaction
+    from services.outbox import SYSTEM, write_event
+    with app.app_context():
+        first = fetch_one("SELECT event_id FROM Integration_Outbox WHERE status = 'Pending' ORDER BY seq LIMIT 1")
+        with transaction() as cur:                     # two good events queued AFTER the bad one
+            write_event(cur, "test.after_1", "user", 4, who=SYSTEM)
+            write_event(cur, "test.after_2", "user", 4, who=SYSTEM)
+    real = mongo_sync.apply_event
+
+    def flaky(db, event_id, *a, **kw):
+        if event_id == first["event_id"]:
+            raise TypeError("boom")
+        return real(db, event_id, *a, **kw)
+
+    monkeypatch.setattr(mongo_sync, "apply_event", flaky)
+    with app.app_context():
+        r = mongo_sync.process_pending()
+        assert r["failed"] == 1 and r["sent"] == 2      # the bad one did not stop the two behind it
+        assert outbox(app, "Pending") == 1               # only the bad one is left
+        for _ in range(mongo_sync.MAX_RETRIES):
+            mongo_sync.process_pending()
+        row = fetch_one("SELECT status, retry_count, last_error FROM Integration_Outbox WHERE event_id = %s",
+                        (first["event_id"],))
+    assert row["status"] == "Failed" and row["retry_count"] == mongo_sync.MAX_RETRIES
+    assert "TypeError" in row["last_error"]
 
 
 def test_checkout_reaches_mongo_session(app, fresh_db, mongo, api):
@@ -88,7 +124,8 @@ def test_register_creates_default_preferences(app, fresh_db, mongo, client):
     uid = data(r)["user_id"]
     with app.app_context():
         mongo_sync.process_pending()
-    assert mongo.User_Preferences.find_one({"userId": uid})["theme"] == "light"
+    doc = mongo.User_Preferences.find_one({"userId": uid})
+    assert doc["notifications"]["checkIn"] is True and "theme" not in doc
 
 
 # ---- scheduler jobs ----------------------------------------------------------------
@@ -102,7 +139,8 @@ def test_jobs_expire_noshow_overstay(app, fresh_db):
         assert expiry.expire_holds(now + timedelta(minutes=4)) == 1          # reservation 4
         assert expiry.mark_no_shows(now + timedelta(minutes=21)) == 1        # reservation 3
         assert overstay.send_end_warnings(now + timedelta(minutes=46)) == 1  # reservation 1 ends in 60 min
-        assert overstay.detect_overstays(now + timedelta(minutes=61)) == 2   # reservation 12 (seed) + 1 (now late)
+        assert overstay.detect_overstays(now + timedelta(minutes=70)) == 1   # reservation 12 only: 1 is inside the grace
+        assert overstay.detect_overstays(now + timedelta(minutes=76)) == 1   # reservation 1: grace (15 min) is over
         from db.mysql import fetch_all
         rows = {r["reservation_id"]: r for r in fetch_all(
             "SELECT reservation_id, status, is_overstay FROM Reservations WHERE reservation_id IN (1,3,4)")}
@@ -155,6 +193,17 @@ def test_preferences(api, fresh_db, mongo):
     p = data(c.delete("/api/me/preferences"))
     assert p["theme"] == "light" and p["notifications"]["overstay"] is True
     assert data(c.get("/api/auth/me"))["preferences"]["theme"] == "light"
+
+
+def test_old_documents_with_theme_still_work(api, fresh_db, mongo):
+    """Documents written by an older version may still have theme/language: they are ignored and dropped."""
+    mongo.User_Preferences.update_one({"userId": 4}, {"$set": {"theme": "dark", "language": "th"}})
+    c = api()
+    c.login("somchai@example.com")
+    assert "theme" not in data(c.get("/api/me/preferences"))
+    c.c.put("/api/me/preferences", json={"notifications": {"noShow": False}}, headers=c._h())
+    doc = mongo.User_Preferences.find_one({"userId": 4})
+    assert "theme" not in doc and "language" not in doc and doc["notifications"]["noShow"] is False
 
 
 def test_sessions_history(api, mongo):
