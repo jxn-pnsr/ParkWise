@@ -1,8 +1,11 @@
+import os
+import pytest
+
+from app import STATIC_DIR
+
 from datetime import datetime
 from decimal import Decimal
-
 from flask import Blueprint
-
 from core.errors import Conflict, NotFound, ValidationError
 from core.responses import get_pagination, ok, paginated
 from tests.conftest import needs_mysql
@@ -13,11 +16,11 @@ def _add_test_routes(app):
 
     @bp.get("/api/_t/conflict")
     def conflict():
-        raise Conflict("SLOT_TAKEN", "ช่องนี้ถูกจองแล้ว", extra={"alternatives": [5, 6]})
+        raise Conflict("SLOT_TAKEN", "This parking slot has already been reserved.", extra={"alternatives": [5, 6]})
 
     @bp.get("/api/_t/validation")
     def validation():
-        raise ValidationError(fields={"duration_hours": "ต้องอยู่ระหว่าง 1-12"})
+        raise ValidationError(fields={"duration_hours": "Must be between 1 and 12."})
 
     @bp.get("/api/_t/missing")
     def missing():
@@ -30,7 +33,7 @@ def _add_test_routes(app):
     @bp.get("/api/_t/types")
     def types():
         return ok({"at": datetime(2026, 11, 20, 3, 0, 0), "fee": Decimal("40.00"),
-                   "rate": Decimal("12.50"), "name": "ลาน A"})
+                   "rate": Decimal("12.50"), "name": "Parking Lot A"})
 
     @bp.get("/api/_t/page")
     def page():
@@ -46,12 +49,12 @@ def test_error_envelopes(app):
 
     r = c.get("/api/_t/conflict")
     assert r.status_code == 409
-    assert r.get_json() == {"ok": False, "error": {"code": "SLOT_TAKEN", "message": "ช่องนี้ถูกจองแล้ว",
+    assert r.get_json() == {"ok": False, "error": {"code": "SLOT_TAKEN", "message": "This parking slot has already been reserved.",
                                                   "alternatives": [5, 6]}}
 
     r = c.get("/api/_t/validation")
     assert r.status_code == 400
-    assert r.get_json()["error"]["fields"] == {"duration_hours": "ต้องอยู่ระหว่าง 1-12"}
+    assert r.get_json()["error"]["fields"] == {"duration_hours": "Must be between 1 and 12."}
 
     assert c.get("/api/_t/missing").status_code == 404
 
@@ -76,7 +79,7 @@ def test_wrong_method_is_json(client):
 def test_json_types(app):
     _add_test_routes(app)
     data = app.test_client().get("/api/_t/types").get_json()["data"]
-    assert data == {"at": "2026-11-20T03:00:00Z", "fee": 40, "rate": 12.5, "name": "ลาน A"}
+    assert data == {"at": "2026-11-20T03:00:00Z", "fee": 40, "rate": 12.5, "name": "Parking Lot A"}
 
 
 def test_pagination_limits(app):
@@ -88,21 +91,28 @@ def test_pagination_limits(app):
 
 
 def test_frontend_index_served(client):
-    import os
-    import pytest
-    from app import STATIC_DIR
     if not os.path.exists(os.path.join(STATIC_DIR, "index.html")):
         pytest.skip("frontend files not copied into static/ yet")
     r = client.get("/")
     assert r.status_code == 200
     assert "ParkWise" in r.get_data(as_text=True)
 
-
 @needs_mysql
-def test_health_reports_both_databases(client):
+def test_health_public_is_minimal(client):
     r = client.get("/api/health")
     assert r.status_code == 200
+
     data = r.get_json()["data"]
+    assert data["status"] == "ok" and data["server_time"].endswith("Z")
+    assert "mongo" not in data and "outbox" not in data  
+
+
+@needs_mysql
+def test_health_reports_both_databases(api):
+    c = api()
+    assert c.login("admin@parkwise.local").status_code == 200
+
+    data = c.get("/api/health").get_json()["data"]
     assert data["mysql"] == "ok"
     assert data["mongo"] in ("ok", "down")  # The app can run without MongoDB.
     assert data["server_time"].endswith("Z")
