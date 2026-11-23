@@ -42,8 +42,9 @@ def detect_overstays(now=None):
     now = now or now_utc()
     done = 0
     with transaction() as cur:
+        late_from = now - timedelta(minutes=cfg("OVERSTAY_GRACE_MINUTES"))
         cur.execute(SELECT + "WHERE r.status = 'In Use' AND r.overstay_notified = 0 AND r.end_time < %s "
-                    "FOR UPDATE OF r SKIP LOCKED", (now,))
+                    "FOR UPDATE OF r SKIP LOCKED", (late_from,))
         for r in cur.fetchall():
             cur.execute("SELECT reservation_id FROM Reservations WHERE slot_id = %s AND status IN ('Held','Confirmed') "
                         "AND start_time >= %s ORDER BY start_time LIMIT 1", (r["slot_id"], r["end_time"]))
@@ -55,8 +56,11 @@ def detect_overstays(now=None):
                                   "next_reservation_id": nxt["reservation_id"] if nxt else None},
                         notify=notification("overstay", "You are over your booked time",
                                             f"Your booking for bay {r['slot_code']} ended at "
-                                            f"{fmt_bkk(r['end_time'], '%H:%M')}. Overstay fees now apply."
+                                            f"{fmt_bkk(r['end_time'], '%H:%M')} and the "
+                                            f"{cfg('OVERSTAY_GRACE_MINUTES')}-minute grace period is over. "
+                                            "Overstay fees now apply."
                                             + (" Another customer has booked this bay next." if nxt else "")),
                         target_user_id=r["user_id"], who=SYSTEM)
             done += 1
     return done
+

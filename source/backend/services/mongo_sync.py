@@ -17,7 +17,7 @@ import json
 import logging
 from datetime import datetime
 
-from pymongo.errors import PyMongoError
+from pymongo.errors import ConnectionFailure, PyMongoError, ServerSelectionTimeoutError
 
 from core.timeutil import now_utc
 from db.mongo import MongoUnavailable, get_mongo
@@ -28,6 +28,17 @@ log = logging.getLogger(__name__)
 
 MAX_RETRIES = 5
 BATCH = 100
+
+# "MongoDB is not reachable" (do not count against the event)
+UNREACHABLE = (MongoUnavailable, ConnectionFailure, ServerSelectionTimeoutError)
+
+def _is_unreachable(err):
+    if isinstance(err, UNREACHABLE):
+        return True
+    # NotPrimaryError / network errors carry this label in PyMongo 4
+    has_label = getattr(err, "has_error_label", None)
+    return bool(has_label and (has_label("RetryableWriteError") or has_label("NetworkError")))
+
 
 # notification type -> switch in User_Preferences.notifications
 PREF_FOR_TYPE = {"hold_expired": "holdExpired", "no_show": "noShow", "checkin_done": "checkIn",
@@ -93,8 +104,7 @@ def apply_event(db, event_id, event_type, payload, occurred_at):
     # 4) new account -> default preferences
     if event_type == "user.registered" and payload.get("entity_id") is not None:
         db.User_Preferences.update_one({"userId": payload["entity_id"]}, {"$setOnInsert": {
-            "userId": payload["entity_id"], "theme": DEFAULT_PREFERENCES["theme"],
-            "language": DEFAULT_PREFERENCES["language"], "notifications": dict(DEFAULT_PREFERENCES["notifications"]),
+            "userId": payload["entity_id"], "notifications": dict(DEFAULT_PREFERENCES["notifications"]),
             "defaultVehicleId": None, "updatedAt": occurred_at}}, upsert=True)
 
 
@@ -112,16 +122,20 @@ def process_pending(limit=BATCH):
                 continue  # another worker took it
             try:
                 apply_event(get_mongo(), e["event_id"], e["event_type"], e["payload"], e["created_at"])
-            except (MongoUnavailable, PyMongoError, ValueError, KeyError) as err:
+            except Exception as err:
+                if _is_unreachable(err):
+                    cur.execute("UPDATE Integration_Outbox SET last_error = %s WHERE event_id = %s",
+                                (("MongoDB unreachable: " + str(err))[:500], event_id))
+                    result["waiting"] = result.get("waiting", 0) + 1
+                    log.info("outbox paused: %s", err)
+                    break
                 retries = e["retry_count"] + 1
                 cur.execute("UPDATE Integration_Outbox SET retry_count = %s, last_error = %s, status = %s "
                             "WHERE event_id = %s",
-                            (retries, str(err)[:500], "Failed" if retries >= MAX_RETRIES else "Pending", event_id))
+                            (retries, f"{type(err).__name__}: {err}"[:500],
+                             "Failed" if retries >= MAX_RETRIES else "Pending", event_id))
                 result["failed"] += 1
-                if isinstance(err, (MongoUnavailable, PyMongoError)):
-                    # MongoDB is down: stop this round, the rest waits in order
-                    log.info("outbox paused: %s", err)
-                    break
+                log.warning("outbox event %s failed (%s/%s): %s", event_id, retries, MAX_RETRIES, err)
                 continue
             cur.execute("UPDATE Integration_Outbox SET status = 'Sent', sent_at = %s, last_error = NULL "
                         "WHERE event_id = %s", (now_utc(), event_id))
