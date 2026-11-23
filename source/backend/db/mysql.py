@@ -1,25 +1,24 @@
-"""MySQL access: one connection per request + a transaction helper.
+"""MySQL access with pooled request connections and transaction helpers.
 
 Use in services:
 
     from db.mysql import transaction, fetch_one, fetch_all
 
-    # read-only
+    # Read
     lot = fetch_one("SELECT * FROM Parking_Lots WHERE lot_id = %s", (lot_id,))
 
-    # writes: everything inside the block is ONE transaction.
-    # Leaving the block normally -> COMMIT. Any exception -> ROLLBACK, then re-raised.
+    # Write in one transaction: COMMIT on success, ROLLBACK on error.
     with transaction() as cur:
         cur.execute("SELECT ... FOR UPDATE", (...))
         cur.execute("INSERT ...", (...))
 
-    # Retry once on deadlock (spec 10.1): put the body in a function.
-    run_in_transaction(create_hold, user_id, ...)   # create_hold(cur, user_id, ...)
+    # Retry once on deadlock.
+    run_in_transaction(create_hold, user_id, ...)  # create_hold(cur, user_id, ...)
 
-Always use %s placeholders (parameterized query). Never build SQL with f-strings
-from user input.
+Always use %s placeholders. Never build SQL with user input.
 """
 import logging
+import threading
 from contextlib import contextmanager
 
 import pymysql
@@ -28,7 +27,7 @@ from pymysql.cursors import DictCursor
 
 log = logging.getLogger(__name__)
 
-DEADLOCK_ERRORS = (1213, 1205)  # deadlock found / lock wait timeout
+DEADLOCK_ERRORS = (1213, 1205)  # Deadlock / lock wait timeout
 
 
 def _settings():
@@ -36,13 +35,13 @@ def _settings():
         c = current_app.config
         return dict(host=c["MYSQL_HOST"], port=c["MYSQL_PORT"], user=c["MYSQL_USER"],
                     password=c["MYSQL_PASSWORD"], database=c["MYSQL_DB"])
-    from config import Config  # scripts and scheduler jobs without an app context
+    from config import Config  # Used by scripts and scheduler jobs
     return dict(host=Config.MYSQL_HOST, port=Config.MYSQL_PORT, user=Config.MYSQL_USER,
                 password=Config.MYSQL_PASSWORD, database=Config.MYSQL_DB)
 
 
 def connect():
-    """Open a new connection. UTC session time zone, REPEATABLE READ, no autocommit."""
+    """Open a connection with UTC, REPEATABLE READ, and autocommit disabled."""
     conn = pymysql.connect(
         charset="utf8mb4",
         cursorclass=DictCursor,
@@ -54,10 +53,71 @@ def connect():
     return conn
 
 
+# Reuse idle connections after rolling back any unfinished transaction.
+_pool = {}
+_pool_lock = threading.Lock()
+
+
+def _pool_key(settings):
+    return (settings["host"], settings["port"], settings["user"], settings["database"])
+
+
+def _checkout():
+    settings = _settings()
+    key = _pool_key(settings)
+    while True:
+        with _pool_lock:
+            idle = _pool.get(key)
+            conn = idle.pop() if idle else None
+        if conn is None:
+            return connect()
+        try:
+            conn.ping(reconnect=False)
+            conn.select_db(settings["database"])  # Handle database rebuilds
+            conn.pw_in_tx = False
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _checkin(conn, pool_size):
+    try:
+        conn.rollback()  # Release locks and end read snapshots
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return
+    conn.pw_in_tx = False
+    key = _pool_key(_settings())
+    with _pool_lock:
+        idle = _pool.setdefault(key, [])
+        if len(idle) < pool_size:
+            idle.append(conn)
+            return
+    conn.close()
+
+
+def clear_pool():
+    """Close idle connections (tests or MySQL settings changes)."""
+    with _pool_lock:
+        conns = [c for idle in _pool.values() for c in idle]
+        _pool.clear()
+    for c in conns:
+        try:
+            c.close()
+        except Exception:
+            pass
+
+
 def get_db():
-    """Connection for the current request (opened on first use, closed at teardown)."""
+    """Get the current request's connection, creating it on first use."""
     if "mysql" not in g:
-        g.mysql = connect()
+        g.mysql = _checkout()
     return g.mysql
 
 
@@ -65,16 +125,20 @@ def close_db(_exc=None):
     conn = g.pop("mysql", None)
     if conn is not None:
         try:
-            if conn.pw_in_tx:
-                conn.rollback()
-            conn.close()
-        except Exception:  # connection may already be dead
+            size = current_app.config.get("MYSQL_POOL_SIZE", 0) if has_app_context() else 0
+            if size > 0:
+                _checkin(conn, size)
+            else:
+                if conn.pw_in_tx:
+                    conn.rollback()
+                conn.close()
+        except Exception:  # Connection may already be closed
             pass
 
 
 @contextmanager
 def _connection():
-    """Request connection inside Flask, otherwise a private one that is closed after use."""
+    """Use the request connection or a temporary connection outside Flask."""
     if has_app_context():
         yield get_db()
         return
@@ -87,10 +151,10 @@ def _connection():
 
 @contextmanager
 def transaction():
-    """BEGIN ... COMMIT, or ROLLBACK on any exception.
+    """Commit on success or roll back on error.
 
-    Transactions cannot be nested: a service that needs another service's
-    steps should accept the cursor instead of opening its own transaction.
+    Nested transactions are not allowed. Pass the cursor to other services
+    that need to share the same transaction.
     """
     with _connection() as conn:
         if conn.pw_in_tx:
@@ -117,7 +181,7 @@ def is_deadlock(exc):
 
 
 def run_in_transaction(fn, *args, retries=1, **kwargs):
-    """Run fn(cur, *args, **kwargs) in a transaction; retry `retries` times on deadlock."""
+    """Run fn(cur, *args, **kwargs), retrying on deadlocks."""
     attempt = 0
     while True:
         try:
@@ -131,16 +195,13 @@ def run_in_transaction(fn, *args, retries=1, **kwargs):
             raise
 
 
-# ---- read helpers (outside a transaction) -----------------------------------
-
 def _read(sql, params, many):
     with _connection() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall() if many else cur.fetchone()
         if not conn.pw_in_tx:
-            # End the implicit read transaction so the next read sees fresh data.
-            conn.commit()
+            conn.commit()  # End the read transaction to get fresh data next time
         return rows
 
 
@@ -158,7 +219,7 @@ def fetch_value(sql, params=None):
 
 
 def ping():
-    """True if MySQL answers. Used by /api/health."""
+    """Check MySQL connectivity for /api/health."""
     try:
         return fetch_value("SELECT 1") == 1
     except Exception as e:
