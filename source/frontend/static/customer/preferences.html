@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Preferences – ParkWise</title>
-  <script src="/js/theme-init.js"></script>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -12,15 +11,8 @@
   <div class="page-head" id="head"></div>
   <div class="dash-grid" style="grid-template-columns:1fr 1fr">
     <section class="panel" aria-labelledby="look-title">
-      <div class="panel-head"><h2 id="look-title">Look and booking</h2></div>
+      <div class="panel-head"><h2 id="look-title">Booking</h2></div>
       <div class="res-form">
-        <div class="field"><span class="label">Theme</span>
-          <div class="segmented" role="group" aria-label="Theme">
-            <button type="button" data-theme-choice="light">Light</button><button type="button" data-theme-choice="dark">Dark</button>
-          </div></div>
-        <div class="field"><label class="label" for="language">Language</label>
-          <select class="select" id="language"><option value="en">English</option><option value="th">ไทย (Thai)</option></select>
-          <span class="hint">The app is in English for now; this choice is saved for later.</span></div>
         <div class="field"><label class="label" for="vehicle">Main vehicle (chosen first when you book)</label>
           <select class="select" id="vehicle"></select></div>
       </div>
@@ -36,12 +28,12 @@
   // User_Preferences lives in MongoDB and is changed directly by Flask (spec 10.3).
   // The main vehicle is stored in MySQL (Customer_Vehicles.is_default), the source of truth.
   import { api } from "/js/api.js";
-  import { mountShell, pageHeader, applyTheme } from "/js/shell.js";
+  import { mountShell, pageHeader } from "/js/shell.js";
   import { html, render, $, $$, toast, toastError, confirmDialog } from "/js/ui.js";
   import { fmtPlate } from "/js/format.js";
 
   await mountShell({ role: "Customer", active: "preferences" });
-  pageHeader($("#head"), { title: "Preferences", subtitle: "Choose how ParkWise looks and which messages you receive. Changes save straight away." });
+  pageHeader($("#head"), { title: "Preferences", subtitle: "Choose your main vehicle and which messages you receive. Changes save straight away." });
 
   const LABELS = {
     holdExpired: ["Hold expired", "When a held bay is released because you did not confirm in time"],
@@ -54,8 +46,6 @@
   let prefs, vehicles = [];
 
   function draw() {
-    $$("[data-theme-choice]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.themeChoice === prefs.theme)));
-    $("#language").value = prefs.language || "en";
     render($("#vehicle"), vehicles.length ? vehicles.map((v) => html`<option value="${v.vehicle_id}" ${v.vehicle_id === prefs.defaultVehicleId ? "selected" : ""}>${fmtPlate(v)}</option>`)
       : html`<option value="">Add a vehicle first</option>`);
     render($("#switches"), Object.entries(LABELS).map(([key, [title, text]]) => html`<div class="switch-row">
@@ -67,7 +57,6 @@
   async function save(change, message = "Saved.") {
     try {
       prefs = await api.put("/me/preferences", change);
-      applyTheme(prefs.theme);
       draw();
       toast(message);
     } catch (err) { toastError(err); draw(); }
@@ -78,12 +67,10 @@
     draw();
   } catch (err) { toastError(err); }
 
-  $$("[data-theme-choice]").forEach((b) => b.onclick = () => save({ theme: b.dataset.themeChoice }, `${b.textContent} theme on.`));
-  $("#language").onchange = (e) => save({ language: e.target.value });
   $("#vehicle").onchange = (e) => e.target.value && save({ defaultVehicleId: Number(e.target.value) }, "Main vehicle updated.");
   $("#reset").onclick = async () => {
-    if (!(await confirmDialog({ title: "Reset your preferences?", message: "Theme, language and notification switches go back to the defaults." }))) return;
-    try { prefs = await api.del("/me/preferences"); applyTheme(prefs.theme); draw(); toast("Preferences reset."); } catch (err) { toastError(err); }
+    if (!(await confirmDialog({ title: "Reset your preferences?", message: "Main vehicle and notification switches go back to the defaults." }))) return;
+    try { prefs = await api.del("/me/preferences"); draw(); toast("Preferences reset."); } catch (err) { toastError(err); }
   };
 </script>
 </body>

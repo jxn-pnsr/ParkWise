@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Find a booking – ParkWise</title>
-  <script src="/js/theme-init.js"></script>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -26,7 +25,7 @@
   import { api } from "/js/api.js";
   import { mountShell, pageHeader } from "/js/shell.js";
   import { html, icon, render, $, toastError, emptyState, reservationBadge, getParam } from "/js/ui.js";
-  import { fmtRange } from "/js/format.js";
+  import { fmtRange, fmtMoney } from "/js/format.js";
   import { reservationCard, wireActions } from "/js/staff.js";
 
   await mountShell({ role: "Staff", active: "search" });
@@ -46,9 +45,11 @@
         : html`<section class="panel">${emptyState({ iconName: "search", title: `No active booking for “${plate}”`,
             text: "Ask the driver to book a bay in the ParkWise app first. Recent bookings for this plate are listed below." })}</section>`}
       ${last.recent.length ? html`<section class="panel mt-3"><div class="panel-head"><h2>Recent bookings for this plate</h2></div>
-        <div class="table-wrap"><table class="table"><thead><tr><th>Plate</th><th>Bay</th><th>Booked</th><th>Status</th></tr></thead>
+        <div class="table-wrap"><table class="table"><thead><tr><th>Plate</th><th>Bay</th><th>Booked</th><th>Status</th><th>Payment</th></tr></thead>
         <tbody>${last.recent.map((r) => html`<tr><td><b>${r.vehicle.plate_number}</b></td><td>${r.slot.slot_code} · ${r.slot.lot_name}</td>
-          <td>${fmtRange(r.start_time, r.end_time)}</td><td>${reservationBadge(r.status, r.display_label)}</td></tr>`)}</tbody></table></div></section>` : ""}`);
+          <td>${fmtRange(r.start_time, r.end_time)}</td><td>${reservationBadge(r.status, r.display_label)}</td>
+          <td>${r.payment ? (r.payment.status === "Paid" ? html`<span class="subtle">Paid</span>`
+            : html`<button class="btn btn-secondary btn-sm" data-cash="${r.reservation_id}">Cash received (${fmtMoney(r.payment.total_amount, 2)})</button>`) : html`<span class="subtle">–</span>`}</td></tr>`)}</tbody></table></div></section>` : ""}`);
     wireActions($("#results"), find, () => search(plate));
   }
 

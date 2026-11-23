@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Current parking – ParkWise</title>
-  <script src="/js/theme-init.js"></script>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -79,7 +78,7 @@
     drawUpcoming();
   }
   await load();
-  setInterval(() => {
+  setInterval(() => {               // tick the "time left" text every 30 s, refetch the fee every 2 min
     for (const r of data?.parked || []) {
       const el = document.querySelector(`[data-left="${r.reservation_id}"]`);
       if (el) { const l = left(r); el.textContent = l.late ? `${l.text} over` : `${l.text} left`; }

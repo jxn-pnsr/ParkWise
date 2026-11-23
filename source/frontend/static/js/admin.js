@@ -1,5 +1,10 @@
 // Shared building blocks for the admin pages: page setup, data table with
 // paging, form dialog that shows API field errors, and small helpers.
+//
+//   const user = await adminPage({ active: "users", title: "Users", subtitle: "..." , actions });
+//   const table = dataTable($("#table"), { columns, load: (page) => api.get("/admin/users", {page, ...filters}) });
+//   const values = await formDialog({ title, fields, submit: (v) => api.post("/admin/users", v) });
+
 import { mountShell, pageHeader } from "./shell.js";
 import { html, icon, render, $, toast, toastError, setBusy, skeletonRows, emptyState, showFormErrors, clearFormErrors } from "./ui.js";
 
@@ -9,7 +14,12 @@ export async function adminPage({ active, title, subtitle, actions = "" }) {
   return user;
 }
 
-
+/**
+ * Table with a "Show more"-free pager.
+ * columns: [{ label, render: (row) => html, cls: "num" }]
+ * load(page) must resolve to { items, page, per_page, total } (or a plain array).
+ * rowActions(row) -> html for the last cell; wire(rootEl, rows) attaches click handlers.
+ */
 export function dataTable(el, { columns, load, rowActions = null, wire = null, empty = "Nothing here yet", emptyIcon = "list" }) {
   let page = 1, rows = [];
   const cols = columns.length + (rowActions ? 1 : 0);
@@ -50,8 +60,12 @@ export function dataTable(el, { columns, load, rowActions = null, wire = null, e
   return { refresh, rows: () => rows, find: (id, key) => rows.find((r) => String(r[key]) === String(id)) };
 }
 
-/** submit(values) is awaited; on ApiError the field errors are shown and the dialog stays open.
- * Resolves with submit()'s result, or null when cancelled. */
+/**
+ * Modal form. fields: [{ name, label, type: text|email|password|number|select|textarea|checkbox|datetime-local,
+ *                        options: [[value, label]], value, hint, required, placeholder }]
+ * submit(values) is awaited; on ApiError the field errors are shown and the dialog stays open.
+ * Resolves with submit()'s result, or null when cancelled.
+ */
 export function formDialog({ title, intro = "", fields, submitText = "Save", submit, danger = false }) {
   return new Promise((resolve) => {
     const dlg = document.createElement("dialog");

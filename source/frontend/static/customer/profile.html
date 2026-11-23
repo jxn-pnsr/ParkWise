@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Profile – ParkWise</title>
-  <script src="/js/theme-init.js"></script>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -35,7 +34,7 @@
           <input class="input" id="current_password" name="current_password" type="password" autocomplete="current-password" required></div>
         <div class="field"><label class="label" for="new_password">New password</label>
           <input class="input" id="new_password" name="new_password" type="password" autocomplete="new-password" required>
-          <span class="hint">At least 8 characters.</span></div>
+          <span class="hint">At least 8 characters, with a letter and a number.</span></div>
         <div class="field"><label class="label" for="new_password2">Repeat new password</label>
           <input class="input" id="new_password2" name="new_password2" type="password" autocomplete="new-password" required></div>
         <button class="btn btn-primary btn-rect btn-block" type="submit">Update password</button>
@@ -84,6 +83,7 @@
     const errors = {};
     if (!v.current_password) errors.current_password = "Enter your current password.";
     if ((v.new_password || "").length < 8) errors.new_password = "Use at least 8 characters.";
+    else if (!/[A-Za-z]/.test(v.new_password) || !/\d/.test(v.new_password)) errors.new_password = "Use at least one letter and one number.";
     if (v.new_password !== v.new_password2) errors.new_password2 = "The passwords do not match.";
     if (Object.keys(errors).length) return showFormErrors(pw, { fields: errors });
     const btn = pw.querySelector("[type=submit]");
@@ -92,7 +92,7 @@
       await api.post("/me/password", { current_password: v.current_password, new_password: v.new_password });
       pw.reset();
       clearFormErrors(pw);
-      toast("Password updated.");
+      toast("Password updated. You were logged out on your other devices.");
     } catch (err) { showFormErrors(pw, err); }
     finally { setBusy(btn, false); }
   });

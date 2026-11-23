@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Notifications – ParkWise</title>
-  <script src="/js/theme-init.js"></script>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -35,7 +34,7 @@
     actions: html`<a class="btn btn-outline" href="/customer/preferences.html">${icon("sliders-horizontal")} Choose what you get</a>` });
 
   const ICON = { reservation_confirmed: "circle-check", reservation_cancelled: "circle-x", hold_expired: "clock", no_show: "triangle-alert",
-    checkin_done: "car", checkout_done: "log-out", payment_paid: "wallet", overstay: "triangle-alert", overstay_warning: "clock", announcement: "bell" };
+    checkin_done: "car", checkout_done: "log-out", payment_paid: "wallet", payment_cash_pending: "wallet", overstay: "triangle-alert", overstay_warning: "clock", announcement: "bell" };
   let filter = "all", page = 1, items = [], total = 0;
 
   function setBadge(unread) {

@@ -45,21 +45,6 @@ export const NAV = {
   ],
 };
 
-// Call applySavedTheme() in <head> to avoid a flash; preferences sync later.
-export function applyTheme(theme) {
-  const t = theme === "dark" ? "dark" : "light";
-  document.documentElement.dataset.theme = t;
-  try { localStorage.setItem("pw-theme", t); } catch { /* storage blocked */ }
-}
-
-async function toggleTheme(user) {
-  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
-  applyTheme(next);
-  if (user && user.role === "Customer") {
-    // keep User_Preferences (MongoDB) in sync; ignore if the endpoint is not ready yet
-    try { await api.put("/me/preferences", { theme: next }, { redirectOn401: false }); } catch { /* not ready */ }
-  }
-}
 
 // render
 function navHtml(items, active, counts) {
@@ -106,31 +91,18 @@ function shellHtml({ user, role, active, title, counts }) {
           <div class="user-pop" role="menu">
             <a href="/customer/profile.html" role="menuitem">${icon("user")}Profile</a>
             <a href="/customer/preferences.html" role="menuitem">${icon("sliders-horizontal")}Preferences</a>
-            <button type="button" data-theme-toggle role="menuitem">${icon("moon", "icon theme-dark")}${icon("sun", "icon theme-light")}Switch theme</button>
             <hr>
             <button type="button" data-logout role="menuitem">${icon("log-out")}Sign out</button>
           </div>
-        </div>` : html`
-        <button class="icon-btn" data-theme-toggle aria-label="Switch between light and dark theme" title="Switch theme">
-          ${icon("moon", "icon theme-dark")}${icon("sun", "icon theme-light")}
-        </button>`}
+        </div>` : ""}
       </div>
     </header>
     <div class="content" data-content></div>
   </div>`;
 }
 
-function themeIconCss() {
-  if ($("#pw-theme-icons")) return;
-  const s = document.createElement("style");
-  s.id = "pw-theme-icons";
-  s.textContent = `[data-theme="dark"] .theme-dark, :root:not([data-theme="dark"]) .theme-light { display: none; }`;
-  document.head.append(s);
-}
-
 function footerHtml() {
-  return html`<footer class="footer"><span>© ${new Date().getFullYear()} ParkWise</span>
-    <nav><a href="#">Help centre</a><a href="#">Terms of service</a></nav></footer>`;
+  return html`<footer class="footer"><span>© ${new Date().getFullYear()} ParkWise</span></footer>`;
 }
 
 /**
@@ -149,7 +121,6 @@ export async function mountShell({ role, active, title, previewUser } = {}) {
     if (!user) { redirectToLogin(); return new Promise(() => {}); }
     if (user.role !== role) { location.replace(homeFor(user)); return new Promise(() => {}); }
   }
-  if (user.preferences?.theme) applyTheme(user.preferences.theme);
 
   const page = document.getElementById("page");
   const app = document.createElement("div");
@@ -161,10 +132,8 @@ export async function mountShell({ role, active, title, previewUser } = {}) {
   content.insertAdjacentHTML("beforeend", String(footerHtml()));
   document.body.prepend(app);
   page.hidden = false;
-  themeIconCss();
 
   app.querySelectorAll("[data-logout]").forEach((b) => (b.onclick = () => (previewUser ? (location.href = "/login.html") : logout())));
-  app.querySelectorAll("[data-theme-toggle]").forEach((b) => (b.onclick = () => toggleTheme(previewUser ? null : user)));
 
   // avatar menu (customers): click to open, click outside or press Esc to close
   const menu = $("[data-user-menu]", app);

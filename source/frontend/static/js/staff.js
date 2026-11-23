@@ -41,6 +41,24 @@ export async function checkIn(r) {
   }
 }
 
+/** Staff took the customer's cash (the customer can't mark cash as paid themselves). */
+export async function confirmCash(paymentId, amount, plate) {
+  const ok = await confirmDialog({
+    title: `Cash received${plate ? ` for ${plate}` : ""}?`,
+    message: `Confirm only after you have the money${amount != null ? ` (${fmtMoney(amount, 2)})` : ""}. The payment becomes Paid.`,
+    confirmText: "Cash received",
+  });
+  if (!ok) return false;
+  try {
+    await api.post(`/staff/payments/${paymentId}/confirm-cash`);
+    toast("Cash payment recorded.");
+    return true;
+  } catch (err) {
+    toast(err.message, "error", 8000);
+    return false;
+  }
+}
+
 export async function checkOut(r) {
   const ok = await confirmDialog({
     title: `Check out ${r.vehicle.plate_number}?`,
@@ -51,14 +69,19 @@ export async function checkOut(r) {
   try {
     const out = await api.post(`/staff/reservations/${r.reservation_id}/checkout`);
     const f = out.fee;
-    await infoDialog(`${out.vehicle.plate_number} checked out`, html`
+    const pid = out.payment && out.payment.payment_id;
+    const done = infoDialog(`${out.vehicle.plate_number} checked out`, html`
       <div class="receipt"><div class="kv">
         <div><span class="k">Parked</span><span class="v">${fmtDuration(f.minutes_parked)} (${fmtTime(out.checked_in_at)}–${fmtTime(out.checked_out_at)})</span></div>
         <div><span class="k">Parking fee (${f.billed_hours} h)</span><span class="v">${fmtMoney(f.base_fee, 2)}</span></div>
         <div><span class="k">Overstay${f.overstay_hours ? ` (${f.overstay_hours} h)` : ""}</span><span class="v">${fmtMoney(f.overstay_fee, 2)}</span></div>
       </div>
       <div class="total-row"><span>Total due</span><span class="amount">${fmtMoney(f.total_amount, 2)}</span></div></div>
-      <p class="hint mt-2">The customer pays in the app (cash or QR). The payment is now waiting as Unpaid.</p>`);
+      <p class="hint mt-2">The customer pays by QR in the app, or in cash to you. If you took cash, press <b>Cash received</b>.</p>
+      ${pid ? html`<p class="mt-2"><button type="button" class="btn btn-secondary" data-cash-now="${pid}">${icon("wallet")} Cash received</button></p>` : ""}`);
+    const cashBtn = document.querySelector(`[data-cash-now="${pid}"]`);
+    if (cashBtn) cashBtn.onclick = async () => { if (await confirmCash(pid, f.total_amount, out.vehicle.plate_number)) cashBtn.replaceWith(Object.assign(document.createElement("span"), { className: "badge tone-ok plain", textContent: "Paid in cash" })); };
+    await done;
     return true;
   } catch (err) {
     toast(err.message, "error", 8000);
@@ -86,6 +109,7 @@ export function reservationCard(r) {
     <div class="result-actions">
       ${r.can_checkin ? html`<button class="btn btn-primary btn-rect" data-in="${r.reservation_id}">${icon("circle-check")} Check in</button>` : ""}
       ${r.can_checkout ? html`<button class="btn btn-primary btn-rect" data-out="${r.reservation_id}">${icon("log-out")} Check out</button>` : ""}
+      ${r.payment && r.payment.status !== "Paid" ? html`<button class="btn btn-secondary btn-rect" data-cash="${r.reservation_id}">${icon("wallet")} Cash received (${fmtMoney(r.payment.total_amount, 2)})</button>` : ""}
     </div>
   </article>`;
 }
@@ -94,4 +118,8 @@ export function reservationCard(r) {
 export function wireActions(root, find, after) {
   root.querySelectorAll("[data-in]").forEach((b) => (b.onclick = async () => { if (await checkIn(find(b.dataset.in))) after(); }));
   root.querySelectorAll("[data-out]").forEach((b) => (b.onclick = async () => { if (await checkOut(find(b.dataset.out))) after(); }));
+  root.querySelectorAll("[data-cash]").forEach((b) => (b.onclick = async () => {
+    const r = find(b.dataset.cash);
+    if (r && r.payment && await confirmCash(r.payment.payment_id, r.payment.total_amount, r.vehicle.plate_number)) after();
+  }));
 }

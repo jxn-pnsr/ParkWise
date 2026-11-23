@@ -34,7 +34,7 @@
   try {
     const types = await api.get("/admin/logs/action-types");
     render($("#types"), html`<option value="">All actions</option>${types.map((t) => html`<option>${t}</option>`)}`);
-  } catch { /* MongoDB down the table below shows the message */ }
+  } catch { /* MongoDB down: the table below shows the message */ }
 
   const ROLE_TONE = { Admin: "bad", Staff: "info", Customer: "ok", System: "mute", Anonymous: "warn" };
   const table = dataTable($("#table"), {

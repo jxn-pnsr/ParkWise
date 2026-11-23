@@ -118,12 +118,21 @@ export async function logout() {
   location.href = "/login.html";
 }
 
-/** Only allow same-site paths as ?next= (blocks open redirects like //evil.com). */
+/** Only allow same-site paths as ?next= (blocks open redirects like //evil.com).
+ *  The browser's own URL parser decides: tabs/CR/LF and backslashes, which the parser drops
+ *  or turns into "/", cannot sneak "//evil.com" past a simple prefix check. */
 export function safeNext(value, fallback = "/") {
-  if (typeof value === "string" && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")) {
-    return value;
+  if (typeof value !== "string" || !value.startsWith("/") || value.length > 2048) return fallback;
+  if (/[\u0000-\u001f\u007f\\]/.test(value)) return fallback;   // control characters or backslash
+  try {
+    const url = new URL(value, location.origin);
+    if (url.origin !== location.origin) return fallback;
+    const path = url.pathname + url.search + url.hash;
+    // "/.//evil.com" normalises to "//evil.com", which the NEXT navigation would read as another host
+    return path.startsWith("//") ? fallback : path;
+  } catch {
+    return fallback;
   }
-  return fallback;
 }
 
 export function redirectToLogin() {

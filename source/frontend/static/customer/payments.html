@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Payments – ParkWise</title>
-  <script src="/js/theme-init.js"></script>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
@@ -25,7 +24,7 @@
   import { fmtDate, fmtTime, fmtMoney, fmtDateTime, PAYMENT_METHOD } from "/js/format.js";
 
   await mountShell({ role: "Customer", active: "payments" });
-  pageHeader($("#head"), { title: "Payments", subtitle: "Pay for your visits after you check out. Cash or QR, no card details needed." });
+  pageHeader($("#head"), { title: "Payments", subtitle: "Pay for your visits after you check out. QR, or cash to a staff member. No card details needed." });
 
   let items = [];
 
@@ -38,9 +37,10 @@
       <td class="num">${fmtMoney(p.base_fee, 2)}</td>
       <td class="num">${Number(p.overstay_fee) ? fmtMoney(p.overstay_fee, 2) : "–"}</td>
       <td class="num"><b>${fmtMoney(p.total_amount, 2)}</b></td>
-      <td>${paymentBadge(p.status)}${p.paid_at ? html`<span class="cell-sub">${PAYMENT_METHOD[p.method] || p.method} · ${fmtDateTime(p.paid_at)}</span>` : ""}</td>
+      <td>${paymentBadge(p.status)}${p.paid_at ? html`<span class="cell-sub">${PAYMENT_METHOD[p.method] || p.method} · ${fmtDateTime(p.paid_at)}</span>`
+        : p.awaiting_cash_confirmation ? html`<span class="cell-sub">Cash: waiting for staff to confirm</span>` : ""}</td>
       <td class="actions">${p.status === "Paid" ? html`<button class="btn btn-ghost btn-sm" data-receipt="${p.payment_id}">Receipt</button>`
-        : html`<button class="btn btn-primary btn-sm" data-pay="${p.payment_id}">Pay now</button>`}</td></tr>`)
+        : html`<button class="btn btn-primary btn-sm" data-pay="${p.payment_id}">${p.awaiting_cash_confirmation ? "Pay by QR instead" : "Pay now"}</button>`}</td></tr>`)
       : html`<tr><td colspan="7">${emptyState({ iconName: "credit-card", title: "No payments yet", text: "A payment appears here after staff check you out." })}</td></tr>`);
     $$("[data-pay]").forEach((b) => b.onclick = () => payDialog(items.find((p) => String(p.payment_id) === b.dataset.pay)));
     $$("[data-receipt]").forEach((b) => b.onclick = () => receipt(items.find((p) => String(p.payment_id) === b.dataset.receipt)));
@@ -64,10 +64,10 @@
         </div>
         ${method === "QR" ? html`<div class="qr-box mt-2"><img src="/api/payments/${p.payment_id}/qr" alt="QR code to pay ${fmtMoney(p.total_amount)}"></div>
           <p class="hint mt-1">Demo QR made by ParkWise itself. No real bank is involved.</p>`
-          : html`<p class="hint mt-2">Pay the cashier at the exit, then press the button below.</p>`}
+          : html`<p class="hint mt-2">Pay the cash to a staff member at the exit. The payment turns to Paid when they confirm they received it.</p>`}
       </div>
       <div class="dialog-actions"><button class="btn btn-secondary" value="cancel">Cancel</button>
-        <button class="btn btn-primary" value="ok">${method === "QR" ? "I have paid" : "Paid in cash"}</button></div>`;
+        <button class="btn btn-primary" value="ok">${method === "QR" ? "I have paid" : "I will pay cash"}</button></div>`;
     const draw = () => {
       render(dlg, body());
       dlg.querySelectorAll("[data-m]").forEach((b) => b.onclick = () => { method = b.dataset.m; draw(); });
@@ -75,9 +75,10 @@
       dlg.querySelector("[value=ok]").onclick = async (e) => {
         setBusy(e.currentTarget, true);
         try {
-          await api.post(`/payments/${p.payment_id}/pay`, { method });
+          const res = await api.post(`/payments/${p.payment_id}/pay`, { method });
           dlg.close(); dlg.remove();
-          toast(`Paid ${fmtMoney(p.total_amount, 2)}. Thank you!`);
+          toast(res.status === "Paid" ? `Paid ${fmtMoney(p.total_amount, 2)}. Thank you!`
+            : `Please pay ${fmtMoney(p.total_amount, 2)} in cash to a staff member.`);
           load();
         } catch (err) { toastError(err); setBusy(e.currentTarget, false); }
       };
