@@ -31,6 +31,7 @@ def serialize(p):
         "base_fee": p["base_fee"], "overstay_fee": p["overstay_fee"], "total_amount": p["total_amount"],
         "method": p["method"], "status": p["status"], "paid_at": p["paid_at"], "created_at": p["created_at"],
         "is_deleted": bool(p["is_deleted"]),
+        "awaiting_cash_confirmation": p["status"] != "Paid" and p["method"] == "Cash",
         "reservation": {"start_time": p["start_time"], "end_time": p["end_time"],
                         "checked_in_at": p["checked_in_at"], "checked_out_at": p["checked_out_at"],
                         "duration_hours": p["duration_hours"], "is_overstay": bool(p["is_overstay"]),
@@ -55,26 +56,63 @@ def list_for_user(user_id, status=None):
     return [serialize(p) for p in fetch_all(sql + " ORDER BY (p.status = 'Paid'), p.created_at DESC", args)]
 
 
+def _lock(cur, payment_id):
+    cur.execute("SELECT p.*, s.slot_code FROM Payments p JOIN Reservations r ON r.reservation_id = p.reservation_id "
+                "JOIN Parking_Slots s ON s.slot_id = r.slot_id "
+                "WHERE p.payment_id = %s AND p.is_deleted = 0 FOR UPDATE OF p", (payment_id,))
+    p = cur.fetchone()
+    if not p:
+        raise NotFound("PAYMENT_NOT_FOUND", "Payment not found.")
+    return p
+
+
+def _not_paid(p):
+    if p["status"] == "Paid":
+        raise Conflict("ALREADY_PAID", "This payment has already been paid.")
+
+
+
 def pay(user, payment_id, method):
     now = now_utc()
     with transaction() as cur:
-        cur.execute("SELECT p.*, s.slot_code FROM Payments p JOIN Reservations r ON r.reservation_id = p.reservation_id "
-                    "JOIN Parking_Slots s ON s.slot_id = r.slot_id "
-                    "WHERE p.payment_id = %s AND p.is_deleted = 0 FOR UPDATE OF p", (payment_id,))
-        p = cur.fetchone()
-        if not p:
-            raise NotFound("PAYMENT_NOT_FOUND", "Payment not found.")
+        p = _lock(cur, payment_id)
         if p["user_id"] != user["user_id"]:
             raise Forbidden()
-        if p["status"] == "Paid":
-            raise Conflict("ALREADY_PAID", "This payment has already been paid.")
-        cur.execute("UPDATE Payments SET status = 'Paid', method = %s, paid_at = %s, updated_at = %s "
-                    "WHERE payment_id = %s", (method, now, now, payment_id))
+        _not_paid(p)
+        if method == "Cash":
+            if not (p["method"] == "Cash" and p["status"] == "Pending"):
+                cur.execute("UPDATE Payments SET status = 'Pending', method = 'Cash', updated_at = %s "
+                            "WHERE payment_id = %s", (now, payment_id))
+                write_event(cur, "payment.cash_requested", "payment", payment_id,
+                            metadata={"reservation_id": p["reservation_id"], "amount": p["total_amount"]},
+                            notify=notification("payment_cash_pending", "Pay cash at the counter",
+                                                f"Please pay THB {p['total_amount']} for bay {p['slot_code']} to a "
+                                                "staff member. The payment shows as Paid once they confirm it."),
+                            target_user_id=p["user_id"])
+        else:
+            cur.execute("UPDATE Payments SET status = 'Paid', method = %s, paid_at = %s, updated_at = %s "
+                        "WHERE payment_id = %s", (method, now, now, payment_id))
+            write_event(cur, "payment.paid", "payment", payment_id,
+                        metadata={"reservation_id": p["reservation_id"], "method": method, "amount": p["total_amount"]},
+                        notify=notification("payment_paid", "Payment received",
+                                            f"Thank you. THB {p['total_amount']} for bay {p['slot_code']} was paid by QR."),
+                        target_user_id=p["user_id"])
+    return serialize(get(payment_id))
+
+
+def confirm_cash(staff, payment_id):
+    """Staff took the cash: Pending/Failed -> Paid (Cash). Logged with who confirmed it."""
+    now = now_utc()
+    with transaction() as cur:
+        p = _lock(cur, payment_id)
+        _not_paid(p)
+        cur.execute("UPDATE Payments SET status = 'Paid', method = 'Cash', paid_at = %s, updated_at = %s "
+                    "WHERE payment_id = %s", (now, now, payment_id))
         write_event(cur, "payment.paid", "payment", payment_id,
-                    metadata={"reservation_id": p["reservation_id"], "method": method, "amount": p["total_amount"]},
+                    metadata={"reservation_id": p["reservation_id"], "method": "Cash", "amount": p["total_amount"],
+                              "confirmed_by": staff["user_id"]},
                     notify=notification("payment_paid", "Payment received",
-                                        f"Thank you. THB {p['total_amount']} for bay {p['slot_code']} was paid by "
-                                        f"{'cash' if method == 'Cash' else 'QR'}."),
+                                        f"Thank you. THB {p['total_amount']} for bay {p['slot_code']} was paid in cash."),
                     target_user_id=p["user_id"])
     return serialize(get(payment_id))
 
