@@ -6,8 +6,15 @@ and again for tests that use `fresh_db`.
 """
 import os
 import sys
-
+import reset_demo
 import pytest
+import pymysql
+
+from core import settings, ratelimit
+from app import create_app  
+from config import TestConfig  
+from db import mysql  
+from services import users
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BACKEND = os.path.dirname(HERE)
@@ -15,24 +22,20 @@ DATABASE_DIR = os.path.join(BACKEND, "..", "database")
 sys.path.insert(0, BACKEND)
 
 # Load environment variables before importing config.
-from dotenv import load_dotenv  # noqa: E402
+from dotenv import load_dotenv  
 
 load_dotenv(os.path.join(BACKEND, ".env"))
 TEST_DB = os.getenv("TEST_MYSQL_DB", "parkwise_test")
 os.environ["MYSQL_DB"] = TEST_DB
-os.environ.setdefault("MONGO_SKIP_SECONDS", "0")  # Disable Mongo outage caching in tests.
+os.environ.setdefault("MONGO_SKIP_SECONDS", "0")  
 
-from app import create_app  # noqa: E402
-from config import TestConfig  # noqa: E402
-from db import mysql  # noqa: E402
 
 TestConfig.MYSQL_DB = TEST_DB
-PASSWORD = "Passw0rd!"  # Password used by seed accounts.
+PASSWORD = "Passw0rd!"  
 
 
 def _mysql_available():
     try:
-        import pymysql
         conn = pymysql.connect(host=TestConfig.MYSQL_HOST, port=TestConfig.MYSQL_PORT,
                                user=TestConfig.MYSQL_USER, password=TestConfig.MYSQL_PASSWORD)
         conn.close()
@@ -47,10 +50,15 @@ needs_mysql = pytest.mark.skipif(not MYSQL_UP, reason="MySQL not reachable (chec
 
 def reset_test_db():
     sys.path.insert(0, DATABASE_DIR)
-    import reset_demo
     reset_demo.reset_mysql(TEST_DB)
-    from core import settings
+    conn = pymysql.connect(host=TestConfig.MYSQL_HOST, port=TestConfig.MYSQL_PORT, user=TestConfig.MYSQL_USER,
+                           password=TestConfig.MYSQL_PASSWORD, database=TEST_DB, autocommit=True)
+    with conn.cursor() as cur:
+        cur.execute("UPDATE System_Config SET config_value = '0' WHERE config_key = 'BLOCK_BOOKING_WHEN_UNPAID'")
+    conn.close()
     settings.invalidate()
+    ratelimit.reset()
+    users.reset_phantom_lockouts()
 
 
 @pytest.fixture(scope="session", autouse=True)
