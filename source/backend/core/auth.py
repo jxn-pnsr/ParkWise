@@ -1,15 +1,16 @@
-"""Who is calling, and may they do this? (security rules 2 and 3)
+"""Authentication and access control (security rules 2 and 3).
 
-    @bp.get("/api/me/vehicles")
-    @login_required("Customer")            # one or more roles; empty = any logged-in user
+    @login_required("Customer")  # Empty roles = any logged-in user
     def my_vehicles():
-        user = current_user()              # dict from the Users table
+        user = current_user()
 
-    ensure_owner(row["user_id"])           # 403 when a customer opens someone else's data
+    ensure_owner(row["user_id"])  # 403 if accessing another customer's data
 
-The user is loaded from MySQL on every request, so an account that the admin
-deactivates loses access at once (the session cookie alone is not trusted).
+    Users are checked against MySQL on every request, so deactivated
+    accounts lose access immediately. Password changes also invalidate
+    older sessions through a password-hash fingerprint.
 """
+import hmac
 from functools import wraps
 
 from flask import g, request, session
@@ -27,13 +28,20 @@ def load_user(user_id):
 
 
 def current_user():
-    """The logged-in user (dict) or None."""
+    """Return the logged-in user or None."""
     if "user" not in g:
+        from core.security import password_fingerprint
         uid = session.get("uid")
-        user = load_user(uid) if uid else None
-        if user and not user["is_active"]:
-            session.clear()
-            user = None
+        user = None
+        if uid:
+            row = fetch_one(f"SELECT {USER_COLUMNS}, password_hash FROM Users WHERE user_id = %s", (uid,))
+            fingerprint = session.get("pwf")
+            if (not row or not row["is_active"] or not fingerprint
+                    or not hmac.compare_digest(fingerprint, password_fingerprint(row["password_hash"]))):
+                session.clear()
+            else:
+                row.pop("password_hash")
+                user = row
         g.user = user
     return g.user
 
@@ -58,7 +66,7 @@ def is_staff_or_admin(user=None):
 
 
 def ensure_owner(owner_user_id):
-    """Customers may only touch their own rows. Staff and Admin pass (their routes check role)."""
+    """Customers may only access their own rows; staff and admins pass."""
     user = current_user()
     if not user:
         raise Unauthenticated()
@@ -67,7 +75,7 @@ def ensure_owner(owner_user_id):
 
 
 def actor():
-    """Who did it, for Integration_Outbox / Activity_Logs."""
+    """Return actor details for logs and outbox events."""
     user = current_user() if _in_request() else None
     return {
         "actor_user_id": user["user_id"] if user else None,
