@@ -99,11 +99,9 @@ dbp.Notifications.createIndex({ reservationId: 1 }, { name: "ix_notif_reservatio
 // User_Preferences: one document per user
 ensureCollection("User_Preferences", { $jsonSchema: {
   bsonType: "object",
-  required: ["userId", "theme", "updatedAt"],
+  required: ["userId", "updatedAt"],
   properties: {
     userId:   { bsonType: idType },
-    theme:    { bsonType: "string", enum: ["light", "dark"] },
-    language: { bsonType: "string", enum: ["th", "en"] },
     notifications: {
       bsonType: "object",
       properties: {
