@@ -35,6 +35,8 @@ def reset_skip():
     global _skip_until
     _skip_until = 0.0
 
+LEGACY_KEYS = ("theme", "language")     
+
 DEFAULT_PREFERENCES = {
     "theme": "light",
     "language": "en",
@@ -55,6 +57,8 @@ def preferences(user_id):
     out = {**DEFAULT_PREFERENCES, **(doc or {})}
     out["notifications"] = {**DEFAULT_PREFERENCES["notifications"], **(out.get("notifications") or {})}
     out.pop("userId", None)
+    for key in LEGACY_KEYS:
+        out.pop(key, None)
     return out
 
 

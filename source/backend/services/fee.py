@@ -52,7 +52,7 @@ def calculate_fee(start_time, end_time, duration_hours, actual_in, actual_out, r
         "total_amount": base_fee + overstay_fee,
         "billed_hours": billed_hours,
         "overstay_hours": overstay_hours,
-        "is_overstay": overstay_fee > 0 or actual_out > end_time,
+        "is_overstay": late > timedelta(0),
         "minutes_parked": int((actual_out - actual_in).total_seconds() // 60),
     }
 
