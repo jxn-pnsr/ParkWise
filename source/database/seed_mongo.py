@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pymysql
 from pymongo import MongoClient
@@ -117,7 +117,7 @@ def seed(db, conn):
     for e in events:
         apply_event(db, e["event_id"], e["event_type"], e["payload"], e["created_at"])
 
-    now = datetime.utcnow().replace(second=0, microsecond=0)
+    now = datetime.now(timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
 
     # mark a few notifications as read so we have both read and unread ones
     read_ids = ["00000000-0000-4000-8000-000000000003",
