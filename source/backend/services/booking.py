@@ -90,6 +90,13 @@ def _create_hold(cur, user, booking_type, slot_id, vehicle_id, start, end, durat
     if cur.fetchone()["n"] >= limit:
         raise Conflict("QUOTA_EXCEEDED", f"You already have {limit} active reservations. "
                                          "Finish or cancel one before booking again.")
+    if cfg("BLOCK_BOOKING_WHEN_UNPAID"):
+        cur.execute("SELECT COUNT(*) AS n, COALESCE(SUM(total_amount), 0) AS due FROM Payments "
+                    "WHERE user_id = %s AND status <> 'Paid' AND is_deleted = 0", (user["user_id"],))
+        unpaid = cur.fetchone()
+        if unpaid["n"]:
+            raise Conflict("UNPAID_PAYMENTS", f"Please pay your earlier parking (THB {unpaid['due']:.2f}) in "
+                                              "Payments before booking again.", extra={"unpaid_count": unpaid["n"]})
 
     # same car twice at the same time (rule 5)
     cur.execute(f"SELECT r.reservation_id FROM Reservations r WHERE r.vehicle_id = %(vid)s "
@@ -156,7 +163,7 @@ def confirm(user, reservation_id):
                         notify=notification("hold_expired", "Reservation expired",
                                             f"Your hold on bay {r['slot_code']} ({r['lot_name']}) expired before you confirmed it."),
                         target_user_id=r["user_id"])
-            expired = True
+            expired = round((r["hold_expires_at"] - r["created_at"]).total_seconds() / 60) or cfg("HOLD_MINUTES")
         else:
             assert_transition("Held", "Confirmed")
             cur.execute("UPDATE Reservations SET status = 'Confirmed', confirmed_at = %s, updated_at = %s "
@@ -201,7 +208,7 @@ def customer_actions(row, now=None):
     }
 
 
-def cancel(user, reservation_id, reason=None, by_admin=False):
+def cancel(user, reservation_id, reason=None, by_admin=False, notify=True):
     now = now_utc()
     with transaction() as cur:
         r = _lock_reservation(cur, reservation_id)
@@ -223,10 +230,13 @@ def cancel(user, reservation_id, reason=None, by_admin=False):
                     "cancel_reason = %s, updated_at = %s WHERE reservation_id = %s",
                     (now, user["user_id"], reason, now, reservation_id))
         who = "an administrator" if by_admin else "you"
+        messeage = None
+        if notify:
+            message = notification("reservation_cancelled", "Reservation cancelled",
+                                   f"Your booking for bay {r['slot_code']} on {fmt_bkk(r['start_time'])} "
+                                   f"was cancelled by {who}." + (f" Reason: {reason}" if reason else ""))
         write_event(cur, "reservation.cancelled", "reservation", reservation_id,
                     metadata={"slot": r["slot_code"], "lot": r["lot_name"], "reason": reason, "by_admin": by_admin},
-                    notify=notification("reservation_cancelled", "Reservation cancelled",
-                                        f"Your booking for bay {r['slot_code']} on {fmt_bkk(r['start_time'])} "
-                                        f"was cancelled by {who}." + (f" Reason: {reason}" if reason else "")),
-                    target_user_id=r["user_id"])
+                    notify=message, target_user_id=r["user_id"] if message else None)
     return get_reservation(reservation_id)[1]
+
