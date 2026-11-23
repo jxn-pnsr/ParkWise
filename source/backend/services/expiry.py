@@ -73,3 +73,10 @@ def run_all(now=None):
     except Exception:
         log.exception("expiry sweep failed")
         return {"expired": 0, "no_show": 0}
+
+def run_lazy(now=None):
+    """For GET routes: catch up only when no scheduler is doing it in this process."""
+    from jobs import scheduler
+    if scheduler.is_running():
+        return None
+    return run_all(now)
