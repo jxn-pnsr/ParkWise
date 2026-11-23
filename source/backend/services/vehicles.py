@@ -49,8 +49,8 @@ def get_owned(cur, user_id, vehicle_id, for_update=True):
 
 def _plate_taken(e):
     if isinstance(e, pymysql.err.IntegrityError) and e.args and e.args[0] == 1062:
-        raise Conflict("PLATE_TAKEN", "This plate is already registered.",
-                       fields={"plate_number": "This plate and province are already registered."})
+        raise Conflict("PLATE_TAKEN", "You already have a vehicle with this plate.",
+                       fields={"plate_number": "You already added this plate and province."})
     raise e
 
 
@@ -77,7 +77,7 @@ def add(user_id, plate_number, province, make_default=False):
     return serialize(fetch_one(f"SELECT {COLUMNS} FROM Customer_Vehicles WHERE vehicle_id = %s", (vid,)))
 
 
-def update(user_id, vehicle_id, plate_number=None, province=None):
+def update(user_id, vehicle_id, plate_number=None, province=None, by_admin=False):
     now = now_utc()
     try:
         with transaction() as cur:
@@ -86,6 +86,14 @@ def update(user_id, vehicle_id, plate_number=None, province=None):
             prov = province if province is not None else v["province"]
             if len(plate.replace(" ", "")) < 2:
                 raise ValidationError(fields={"plate_number": "Enter the licence plate."})
+            changed = (plate, prov) != (v["plate_number"], v["province"])
+            if changed and not by_admin:
+                cur.execute("SELECT COUNT(*) AS n FROM Reservations WHERE vehicle_id = %s", (vehicle_id,))
+                if cur.fetchone()["n"]:
+                    raise Conflict("VEHICLE_HAS_BOOKINGS",
+                                   "This vehicle already has bookings, so its plate cannot change. "
+                                   "Add the new plate as another vehicle, then delete this one.",
+                                   fields={"plate_number": "Add a new vehicle instead of editing this one."})
             cur.execute("UPDATE Customer_Vehicles SET plate_number = %s, province = %s, updated_at = %s "
                         "WHERE vehicle_id = %s", (plate, prov, now, vehicle_id))
             write_event(cur, "vehicle.updated", "vehicle", vehicle_id,
