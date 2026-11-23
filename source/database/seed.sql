@@ -127,7 +127,7 @@ VALUES
 
  (12, 4, 2, 15, 'Advance', @now - INTERVAL 240 MINUTE, @now - INTERVAL 60 MINUTE,  3, 'In Use',
   @now - INTERVAL 1005 MINUTE, @now - INTERVAL 1000 MINUTE, @now - INTERVAL 235 MINUTE, NULL, 3, NULL,
-  NULL, NULL, NULL, 1, 1, 1, @now - INTERVAL 1010 MINUTE),
+  NULL, NULL, NULL, 1, 1, 0, @now - INTERVAL 1010 MINUTE),   -- overstay_notified = 0: the scheduler sends the overstay notice live (phase 2)
 
  (13, 5, 4, 15, 'Advance', @now + INTERVAL 30 MINUTE,  @now + INTERVAL 150 MINUTE, 2, 'Confirmed',
   @now - INTERVAL 22 MINUTE, @now - INTERVAL 25 MINUTE, NULL, NULL, NULL, NULL,
