@@ -54,7 +54,6 @@ CREATE TABLE System_Config (
 ) ENGINE=InnoDB;
 
 
-# Customer_Vehicles
 CREATE TABLE Customer_Vehicles (
   vehicle_id   INT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id      INT UNSIGNED NOT NULL,
@@ -65,7 +64,7 @@ CREATE TABLE Customer_Vehicles (
   created_at   DATETIME     NOT NULL DEFAULT (UTC_TIMESTAMP()),
   updated_at   DATETIME     NULL,
   active_plate_key  VARCHAR(100)
-    GENERATED ALWAYS AS (IF(is_deleted = 0, CONCAT(plate_number, '|', province), NULL)) VIRTUAL,
+    GENERATED ALWAYS AS (IF(is_deleted = 0, CONCAT(user_id, '|', plate_number, '|', province), NULL)) VIRTUAL,
   default_owner_key INT UNSIGNED
     GENERATED ALWAYS AS (IF(is_default = 1 AND is_deleted = 0, user_id, NULL)) VIRTUAL,
   PRIMARY KEY (vehicle_id),
