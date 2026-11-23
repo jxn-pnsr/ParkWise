@@ -61,7 +61,7 @@ def reset_test_db():
     users.reset_phantom_lockouts()
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def _build_test_db():
     if MYSQL_UP:
         reset_test_db()

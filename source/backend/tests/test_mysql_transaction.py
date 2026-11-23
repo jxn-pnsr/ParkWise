@@ -184,4 +184,4 @@ def test_mysql_down_does_not_crash_health(app):
     with mock.patch.object(mysql, "connect", side_effect=pymysql.err.OperationalError(2003, "down")):
         r = app.test_client().get("/api/health")
     assert r.status_code == 503
-    assert r.get_json()["data"]["mysql"] == "down"
+    assert r.get_json()["data"]["status"] == "down"

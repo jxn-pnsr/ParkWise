@@ -183,16 +183,17 @@ def test_preferences(api, fresh_db, mongo):
     c = api()
     c.login("somchai@example.com")
     p = data(c.get("/api/me/preferences"))
-    assert p["theme"] == "dark" and p["defaultVehicleId"] == 1
-    p = data(c.c.put("/api/me/preferences", json={"theme": "light", "notifications": {"overstay": False},
-                                                   "defaultVehicleId": 2}, headers=c._h()))
-    assert p["theme"] == "light" and p["notifications"]["overstay"] is False and p["notifications"]["checkIn"] is True
+    assert p["defaultVehicleId"] == 1 and "theme" not in p and "language" not in p
+    p = data(c.c.put("/api/me/preferences", json={"notifications": {"overstay": False}, "defaultVehicleId": 2},
+                     headers=c._h()))
+    assert p["notifications"]["overstay"] is False and p["notifications"]["checkIn"] is True
     assert p["defaultVehicleId"] == 2
     assert data(c.get("/api/me/vehicles"))[0]["vehicle_id"] == 2        # MySQL main car changed too
     assert c.c.put("/api/me/preferences", json={"defaultVehicleId": 3}, headers=c._h()).status_code == 403
     p = data(c.delete("/api/me/preferences"))
-    assert p["theme"] == "light" and p["notifications"]["overstay"] is True
-    assert data(c.get("/api/auth/me"))["preferences"]["theme"] == "light"
+    assert p["notifications"]["overstay"] is True and "theme" not in p
+    assert "preferences" not in data(c.get("/api/auth/me"))
+    assert "theme" not in mongo.User_Preferences.find_one({"userId": 4})
 
 
 def test_old_documents_with_theme_still_work(api, fresh_db, mongo):

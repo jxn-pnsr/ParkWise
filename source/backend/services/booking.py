@@ -180,7 +180,7 @@ def confirm(user, reservation_id):
                         notify=notification("reservation_confirmed", "Reservation confirmed", msg),
                         target_user_id=r["user_id"])
     if expired:  # raised after COMMIT so the Expired status is kept
-        raise Conflict("HOLD_EXPIRED", "The 5-minute hold has ended. Please choose a bay again.")
+        raise Conflict("HOLD_EXPIRED", f"The {expired}-minute hold has ended. Please choose a bay again.")
     return get_reservation(reservation_id)[1]
 
 
