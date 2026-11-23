@@ -1,6 +1,4 @@
-"""Customer data that lives in MongoDB (spec 10.3: written directly by Flask,
-not through the outbox): notifications, preferences, parking history.
-Plus payments (MySQL)."""
+"""Customer MongoDB data (notifications, preferences, parking history) and MySQL payments."""
 from bson import ObjectId
 from bson.errors import InvalidId
 from flask import Blueprint, Response, request
@@ -30,8 +28,6 @@ def _notification(d):
             "is_read": bool(d.get("isRead")), "reservation_id": d.get("reservationId"),
             "sent_at": d.get("sentAt"), "read_at": d.get("readAt")}
 
-
-# ---- notifications ------------------------------------------------------------
 
 @bp.get("/me/notifications")
 @customer
@@ -79,13 +75,11 @@ def delete_one(nid):
     return ok(None)
 
 
-# ---- preferences --------------------------------------------------------------
-
 def _prefs_out(uid):
     p = preferences(uid)
     main = fetch_one("SELECT vehicle_id FROM Customer_Vehicles WHERE user_id = %s AND is_default = 1 AND is_deleted = 0",
                      (uid,))
-    p["defaultVehicleId"] = main["vehicle_id"] if main else None   # MySQL is the source of truth for the main car
+    p["defaultVehicleId"] = main["vehicle_id"] if main else None  # MySQL is the source of truth.
     p.pop("_id", None)
     p.pop("updatedAt", None)
     return p
@@ -100,11 +94,9 @@ def get_preferences():
 @bp.put("/me/preferences")
 @customer
 def put_preferences():
-    """Change any of: theme, language, notifications{...}, defaultVehicleId. Missing keys stay as they are."""
+    """Update notification settings or the default vehicle."""
     uid = current_user()["user_id"]
     v = Input(request_json())
-    theme = v.choice("theme", ("light", "dark")) if "theme" in v.data else None
-    language = v.choice("language", ("en", "th")) if "language" in v.data else None
     switches = v.data.get("notifications")
     if switches is not None and (not isinstance(switches, dict) or any(
             k not in DEFAULT_PREFERENCES["notifications"] or not isinstance(x, bool) for k, x in switches.items())):
@@ -114,13 +106,9 @@ def put_preferences():
 
     db = require_mongo()
     if vehicle_id:
-        vehicles.set_default(uid, vehicle_id)          # MySQL first: it checks the car is this customer's
-    doc = preferences(uid)                             # current values (or defaults)
+        vehicles.set_default(uid, vehicle_id)  # MySQL verifies vehicle ownership.
+    doc = preferences(uid)                    # Load current values or defaults.
     doc.pop("_id", None)
-    if theme:
-        doc["theme"] = theme
-    if language:
-        doc["language"] = language
     if switches:
         doc["notifications"] = {**doc["notifications"], **switches}
     if vehicle_id:
@@ -141,8 +129,6 @@ def reset_preferences():
     return ok(_prefs_out(uid))
 
 
-# ---- parking history (MongoDB Parking_Sessions) -------------------------------
-
 def _session(d):
     fees = d.get("fees") or {}
     return {"reservation_id": d.get("reservationId"), "plate_number": d.get("plateNumber"),
@@ -162,8 +148,6 @@ def sessions():
     docs = db.Parking_Sessions.find({"userId": uid}).sort("checkInAt", -1).skip(offset).limit(per_page)
     return paginated([_session(d) for d in docs], page, per_page, total)
 
-
-# ---- payments (MySQL) -----------------------------------------------------------
 
 @bp.get("/me/payments")
 @customer

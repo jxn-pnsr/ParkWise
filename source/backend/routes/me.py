@@ -1,10 +1,11 @@
-"""/api/me/*  the logged-in customer's own data. Never takes a user_id from the
-request: everything is filtered by the session user (security rule 2)."""
+"""/api/me/*  Logged-in customer's data, always filtered by the session user."""
 from datetime import datetime, timedelta
 
 from flask import Blueprint, request
 
 from core.auth import current_user, ensure_owner, login_required
+from core.ratelimit import hit
+from core.security import restamp_session
 from core.responses import created, get_pagination, ok, paginated
 from core.timeutil import BKK, now_utc, to_naive_utc
 from core.validate import Input, request_json
@@ -17,8 +18,6 @@ from services.queries import OCCUPYING_SQL, RESERVATION_SELECT, serialize_reserv
 bp = Blueprint("me", __name__, url_prefix="/api/me")
 customer = login_required("Customer")
 
-
-# ---- profile ------------------------------------------------------------------
 
 @bp.get("/profile")
 @customer
@@ -42,15 +41,16 @@ def update_profile():
 @bp.post("/password")
 @customer
 def change_password():
+    uid = current_user()["user_id"]
+    hit("password-change", uid, 5, 900, "Too many password attempts. Wait 15 minutes and try again.")
     v = Input(request_json())
     current = v.password("current_password", min_len=1)
     new = v.password("new_password")
     v.done()
-    users.change_password(current_user()["user_id"], current, new)
+    new_hash = users.change_password(uid, current, new)
+    restamp_session(new_hash)  # Keep this session; log out all others.
     return ok(None)
 
-
-# ---- vehicles -------------------------------------------------------------------
 
 @bp.get("/vehicles")
 @customer
@@ -92,13 +92,11 @@ def delete_vehicle(vehicle_id):
     return ok(None)
 
 
-# ---- reservations ---------------------------------------------------------------
-
 @bp.get("/reservations")
 @customer
 def my_reservations():
-    """?scope=active (default) | past | all  &status=Confirmed  &page=&per_page="""
-    expiry.run_all()
+    """?scope=active (default), past, or all; optional status, page, and per_page."""
+    expiry.run_lazy()
     uid = current_user()["user_id"]
     page, per_page, offset = get_pagination()
     scope = request.args.get("scope", "active")
@@ -131,28 +129,28 @@ def my_reservation(reservation_id):
 @bp.get("/parking")
 @customer
 def my_parking():
-    """Where is my car now, and what is next."""
-    expiry.run_all()
+    """Show the customer's current and upcoming parking."""
+    expiry.run_lazy()
     uid = current_user()["user_id"]
     now = now_utc()
     parked = fetch_all(RESERVATION_SELECT + " WHERE r.user_id = %s AND r.status = 'In Use' ORDER BY r.checked_in_at",
                        (uid,))
     upcoming = fetch_all(f"{RESERVATION_SELECT} WHERE r.user_id = %(uid)s AND r.status IN ('Held','Confirmed') "
-                         f"AND {OCCUPYING_SQL} ORDER BY r.start_time LIMIT 3", {**time_params(now), "uid": uid})
+                         f"AND {OCCUPYING_SQL} ORDER BY r.start_time LIMIT 3", {**time_params(now=now), "uid": uid})
+
     def with_fee(r):
         data = serialize_reservation(r, now)
-        # what the customer would pay if they drove out right now
+        # Estimate the fee if the customer leaves now.
         data["fee_if_leave_now"] = calculate_fee(r["start_time"], r["end_time"], r["duration_hours"],
                                                  r["checked_in_at"], max(now, r["checked_in_at"]), all_config())
         return data
+
     return ok({"parked": [with_fee(r) for r in parked],
                "upcoming": [{**serialize_reservation(r, now), **booking.customer_actions(r, now)} for r in upcoming]})
 
 
-# ---- dashboard ------------------------------------------------------------------
-
 def _month_bounds_utc(now):
-    """Start of this month and last month in Bangkok time, as naive UTC."""
+    """Return this and last month's starts as naive UTC."""
     local = now.replace(tzinfo=None) + timedelta(hours=7)
     this_start = datetime(local.year, local.month, 1, tzinfo=BKK)
     prev_local = this_start - timedelta(days=1)
@@ -163,14 +161,14 @@ def _month_bounds_utc(now):
 @bp.get("/dashboard")
 @customer
 def dashboard():
-    expiry.run_all()
+    expiry.run_lazy()
     uid = current_user()["user_id"]
     now = now_utc()
     start, end = availability.resolve_window(None, 1, now)
     lots = availability.lots_summary(start, end, now)
 
     upcoming = fetch_value(f"SELECT COUNT(*) FROM Reservations r WHERE r.user_id = %(uid)s AND {OCCUPYING_SQL}",
-                           {**time_params(now), "uid": uid})
+                           {**time_params(now=now), "uid": uid})
     prev_start, this_start = _month_bounds_utc(now)
     spent = fetch_one(
         "SELECT COALESCE(SUM(CASE WHEN paid_at >= %(this)s THEN total_amount END), 0) AS this_month, "

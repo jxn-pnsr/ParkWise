@@ -1,4 +1,4 @@
-"""Create, confirm, and cancel customer reservations."""
+"""Customer reservation endpoints: create, confirm, and cancel holds."""
 from flask import Blueprint
 
 from core.auth import current_user, login_required

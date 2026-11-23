@@ -1,4 +1,4 @@
-"""Lots and bay colours. Staff and admins can also see plates."""
+"""Lot and bay availability. Staff and admins can also see plates."""
 from flask import Blueprint, request
 
 from core.auth import current_user, is_staff_or_admin, login_required
@@ -27,7 +27,7 @@ def _window():
 @bp.get("/lots")
 @login_required()
 def lots():
-    expiry.run_all()  # lazy check before showing free bays
+    expiry.run_lazy()  # Check expiry before showing free bays.
     start, end = _window()
     return ok({"window": {"start": start, "end": end},
                "items": availability.lots_summary(start, end)})
@@ -36,12 +36,12 @@ def lots():
 @bp.get("/lots/<int:lot_id>/slots")
 @login_required()
 def lot_slots(lot_id):
-    expiry.run_all()
+    expiry.run_lazy()
     start, end = _window()
     return ok(availability.lot_detail(lot_id, start, end, with_details=is_staff_or_admin(current_user())))
 
 
 @bp.get("/config/public")
 def config_public():
-    """Booking rules for the pages (hold minutes, rates, limits). No login needed."""
+    """Public booking rules and limits."""
     return ok(public_config())
