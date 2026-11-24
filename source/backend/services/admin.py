@@ -1,8 +1,7 @@
-"""Admin changes to MySQL data are saved in one transaction and recorded in Activity_Logs. 
-Related data is soft deleted to keep database relationships safe."""
+from datetime import timedelta
+
 import pymysql
 
-from datetime import timedelta
 from core.errors import Conflict, NotFound, ValidationError
 from core.security import hash_password
 from core.settings import DEFAULTS, RULES, _number, check_value, invalidate
@@ -12,8 +11,6 @@ from services.availability import slot_states
 from services.booking import get_reservation
 from services.outbox import notification, write_event
 from services.queries import OCCUPYING_SQL, OVERLAP_SQL, time_params
-from datetime import datetime
-from core.timeutil import BKK, to_naive_utc
 
 USER_COLS = "user_id, email, full_name, phone, role, is_active, failed_login_count, locked_until, created_at, updated_at"
 
@@ -22,8 +19,9 @@ def _dup(e, field, message):
     if isinstance(e, pymysql.err.IntegrityError) and e.args and e.args[0] == 1062:
         raise Conflict("DUPLICATE", message, fields={field: message})
     raise e
-# ---- users ----------------------------------------------------------------------
 
+
+# users
 def user_out(u):
     return {**{k: u[k] for k in ("user_id", "email", "full_name", "phone", "role", "created_at", "updated_at")},
             "is_active": bool(u["is_active"]), "locked_until": u["locked_until"],
@@ -86,8 +84,8 @@ def update_user(admin, user_id, changes):
 
 
 def _release_bookings(cur, user_id, admin, now):
-    """Deactivating an account cancels its Held and Confirmed bookings. 
-    Cars already parked can still check out, and unpaid payments stay unchanged."""
+    """A deactivated account keeps no bay: its Held / Confirmed bookings are cancelled.
+    Parked cars (In Use) are left for check-out, and unpaid payments stay as they are."""
     cur.execute("SELECT r.reservation_id, r.start_time, s.slot_code FROM Reservations r "
                 "JOIN Parking_Slots s ON s.slot_id = r.slot_id "
                 "WHERE r.user_id = %s AND r.status IN ('Held', 'Confirmed') FOR UPDATE OF r", (user_id,))
@@ -108,7 +106,9 @@ def unlock_user(user_id):
             raise NotFound("USER_NOT_FOUND", "User not found.")
         write_event(cur, "admin.user_unlocked", "user", user_id, metadata={})
     return user_out(get_user(user_id))
-# ---- lots ---------------------------------------------------------------------------
+
+
+# lots
 
 def get_lot(lot_id):
     lot = fetch_one("SELECT lot_id, lot_name, location_desc, is_active, created_at FROM Parking_Lots WHERE lot_id = %s",
@@ -181,7 +181,9 @@ def delete_lot(lot_id):
         cur.execute("DELETE FROM Parking_Slots WHERE lot_id = %s", (lot_id,))
         cur.execute("DELETE FROM Parking_Lots WHERE lot_id = %s", (lot_id,))
         write_event(cur, "admin.lot_deleted", "lot", lot_id, metadata={"lot": lot["lot_name"]})
-# ---- slots ----------------------------------------------------------------------------
+
+
+# slots
 
 def get_slot(slot_id):
     s = fetch_one("SELECT s.*, l.lot_name FROM Parking_Slots s JOIN Parking_Lots l ON l.lot_id = s.lot_id "
@@ -229,7 +231,7 @@ def update_slot(slot_id, changes):
                 raise NotFound("SLOT_NOT_FOUND", "Bay not found.")
             if changes.get("slot_status") == "Maintenance" and s["slot_status"] != "Maintenance":
                 busy = _active_bookings(cur, "r.slot_id = %(sid)s", {"sid": slot_id})
-                if busy:   
+                if busy:   # spec 7.2 rule 12
                     raise Conflict("HAS_ACTIVE_RESERVATIONS",
                                    f"Bay {s['slot_code']} has {len(busy)} active or upcoming booking(s). "
                                    "Move or cancel them before closing the bay.", extra={"reservations": busy})
@@ -268,8 +270,12 @@ def delete_slot(slot_id):
             how = "hard"
         write_event(cur, "admin.slot_deleted", "slot", slot_id, metadata={"slot": s["slot_code"], "delete": how})
     return how
+
+
 # ---- reservations ------------------------------------------------------------------------
+
 ADMIN_STATUSES = ("Confirmed", "Cancelled", "Expired", "No-show")
+
 
 
 def move_reservation(admin, reservation_id, new_slot_id, reason):
@@ -279,13 +285,13 @@ def move_reservation(admin, reservation_id, new_slot_id, reason):
     if not r:
         raise NotFound("RESERVATION_NOT_FOUND", "Reservation not found.")
     with transaction() as cur:
-        for sid in sorted({r["slot_id"], new_slot_id}):          # bays first, in id order (no deadlock)
+        for sid in sorted({r["slot_id"], new_slot_id}): # bays first, in id order (no deadlock)
             cur.execute("SELECT slot_id FROM Parking_Slots WHERE slot_id = %s FOR UPDATE", (sid,))
         cur.execute("SELECT * FROM Reservations WHERE reservation_id = %s FOR UPDATE", (reservation_id,))
         locked = cur.fetchone()
-        if not locked:                       # deleted while we were taking the locks
+        if not locked: # deleted while we were taking the locks
             raise NotFound("RESERVATION_NOT_FOUND", "Reservation not found.")
-        if locked["slot_id"] != r["slot_id"]:  # moved by someone else meanwhile: our bay lock is the wrong one
+        if locked["slot_id"] != r["slot_id"]:  # moved by someone else meanwhile our bay lock is the wrong one
             raise Conflict("CHANGED", "This reservation was just changed by someone else. Reload and try again.")
         r = locked
         if r["status"] not in ("Held", "Confirmed", "In Use"):
@@ -314,6 +320,9 @@ def move_reservation(admin, reservation_id, new_slot_id, reason):
                     target_user_id=r["user_id"])
     return get_reservation(reservation_id, include_customer=True)[1]
 
+
+# Status changes an admin may make by hand (from -> allowed targets). In Use / Completed
+# are never changed here: check-in and check-out create sessions and payments.
 ADMIN_TRANSITIONS = {
     "Held": ("Confirmed", "Cancelled", "Expired"),
     "Confirmed": ("Cancelled", "No-show"),
@@ -324,14 +333,20 @@ ADMIN_TRANSITIONS = {
 
 
 def set_reservation_status(admin, reservation_id, status, reason):
-    """Admin changes are logged. When confirming a booking again, the system checks for time conflicts with other bookings, 
-    just like a new booking. It also uses the same locks to prevent overlapping bookings."""
+    """Admin override (logged).
+
+    Making a booking Confirmed again (e.g. Cancelled -> Confirmed) can collide with a
+    booking somebody else made in the meantime, so it takes the same locks and runs the
+    same overlap checks as a new hold (H3): user -> bay -> reservation, then
+    "does anything that still occupies this bay or this car overlap the window?".
+    """
     now = now_utc()
     first = fetch_one("SELECT user_id, slot_id FROM Reservations WHERE reservation_id = %s", (reservation_id,))
     if not first:
         raise NotFound("RESERVATION_NOT_FOUND", "Reservation not found.")
     with transaction() as cur:
         if status == "Confirmed":
+            # same lock order as booking._create_hold (no deadlock with customers booking now)
             cur.execute("SELECT user_id FROM Users WHERE user_id = %s FOR UPDATE", (first["user_id"],))
             cur.execute("SELECT slot_id FROM Parking_Slots WHERE slot_id = %s FOR UPDATE", (first["slot_id"],))
         cur.execute("SELECT * FROM Reservations WHERE reservation_id = %s FOR UPDATE", (reservation_id,))
@@ -406,10 +421,12 @@ def delete_reservation(reservation_id):
             raise Conflict("HAS_PAYMENT", "This reservation has a payment and cannot be deleted.")
         cur.execute("DELETE FROM Reservations WHERE reservation_id = %s", (reservation_id,))
         write_event(cur, "admin.reservation_deleted", "reservation", reservation_id, metadata={"status": r["status"]})
-# ---- payments --------------------------------------------------------------------------------
+
+
+# payments
 
 def create_payment(reservation_id, base_fee=None, overstay_fee=None):
-    """Manual payment for a completed visit that has none (e.g. fixed by hand)."""
+    # Manual payment for a completed visit that has none (e.g. fixed by hand)
     from core.settings import all_config
     from services.fee import calculate_fee
     now = now_utc()
@@ -431,6 +448,8 @@ def create_payment(reservation_id, base_fee=None, overstay_fee=None):
             base_fee = fee["base_fee"] if base_fee is None else base_fee
             overstay_fee = fee["overstay_fee"] if overstay_fee is None else overstay_fee
         if existing:
+            # One payment row per reservation (UNIQUE reservation_id): a soft-deleted row is
+            # brought back with the new amounts instead of inserting a second one (M7).
             pid = existing["payment_id"]
             cur.execute("UPDATE Payments SET base_fee = %s, overstay_fee = %s, total_amount = %s, status = 'Pending', "
                         "method = NULL, paid_at = NULL, is_deleted = 0, updated_at = %s WHERE payment_id = %s",
@@ -475,7 +494,9 @@ def delete_payment(payment_id):
         if not cur.rowcount:
             raise NotFound("PAYMENT_NOT_FOUND", "Payment not found.")
         write_event(cur, "admin.payment_deleted", "payment", payment_id, metadata={"soft_delete": True})
-# ---- config --------------------------------------------------------------------------------------
+
+
+# config
 
 def list_config():
     rows = fetch_all("SELECT c.config_key, c.config_value, c.description, c.updated_at, u.full_name AS updated_by_name "
@@ -506,9 +527,14 @@ def set_config(admin, key, value):
         write_event(cur, "admin.config_updated", "system_config", key,
                     metadata={"old": old["config_value"] if old else None, "new": value})
     invalidate()
-# ---- stats -----------------------------------------------------------------------------------------
+
+
+# stats
 
 def stats():
+    from datetime import datetime
+
+    from core.timeutil import BKK, to_naive_utc
     now = now_utc()
     local = now + timedelta(hours=7)
     month = to_naive_utc(datetime(local.year, local.month, 1, tzinfo=BKK))

@@ -1,150 +1,144 @@
-"""Test setup.
 
-Tests use a separate database (default: parkwise_test) to protect demo data.
-The database is rebuilt from schema.sql and seed.sql once per session,
-and again for tests that use `fresh_db`.
-"""
-import os
-import sys
-import reset_demo
-import pytest
-import pymysql
+from datetime import datetime
+from decimal import Decimal
 
-from core import settings, ratelimit
-from app import create_app  
-from config import TestConfig  
-from db import mysql  
-from services import users
+from flask import Blueprint
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-BACKEND = os.path.dirname(HERE)
-DATABASE_DIR = os.path.join(BACKEND, "..", "database")
-sys.path.insert(0, BACKEND)
-
-# Load environment variables before importing config.
-from dotenv import load_dotenv  
-
-load_dotenv(os.path.join(BACKEND, ".env"))
-TEST_DB = os.getenv("TEST_MYSQL_DB", "parkwise_test")
-os.environ["MYSQL_DB"] = TEST_DB
-os.environ.setdefault("MONGO_SKIP_SECONDS", "0")  
+from core.errors import Conflict, NotFound, ValidationError
+from core.responses import get_pagination, ok, paginated
+from tests.conftest import needs_mysql
 
 
-TestConfig.MYSQL_DB = TEST_DB
-PASSWORD = "Passw0rd!"  
+def _add_test_routes(app):
+    bp = Blueprint("t", __name__)
+
+    @bp.get("/api/_t/conflict")
+    def conflict():
+        raise Conflict("SLOT_TAKEN", "This parking slot has already been reserved.",
+                       extra={"alternatives": [5, 6]})
+
+    @bp.get("/api/_t/validation")
+    def validation():
+        raise ValidationError(
+            fields={"duration_hours": "Must be between 1 and 12."}
+        )
+
+    @bp.get("/api/_t/missing")
+    def missing():
+        raise NotFound()
+
+    @bp.get("/api/_t/crash")
+    def crash():
+        raise RuntimeError("boom")
+
+    @bp.get("/api/_t/types")
+    def types():
+        return ok({
+            "at": datetime(2026, 11, 20, 3, 0, 0),
+            "fee": Decimal("40.00"),
+            "rate": Decimal("12.50"),
+            "name": "Parking Lot A"
+        })
+
+    @bp.get("/api/_t/page")
+    def page():
+        p, per, off = get_pagination()
+        return paginated([], p, per, 0)
+
+    app.register_blueprint(bp)
 
 
-def _mysql_available():
-    try:
-        conn = pymysql.connect(host=TestConfig.MYSQL_HOST, port=TestConfig.MYSQL_PORT,
-                               user=TestConfig.MYSQL_USER, password=TestConfig.MYSQL_PASSWORD)
-        conn.close()
-        return True
-    except Exception:
-        return False
+def test_error_envelopes(app):
+    _add_test_routes(app)
+    c = app.test_client()
+
+    r = c.get("/api/_t/conflict")
+    assert r.status_code == 409
+    assert r.get_json() == {
+        "ok": False,
+        "error": {
+            "code": "SLOT_TAKEN",
+            "message": "This parking slot has already been reserved.",
+            "alternatives": [5, 6]
+        }
+    }
+
+    r = c.get("/api/_t/validation")
+    assert r.status_code == 400
+    assert r.get_json()["error"]["fields"] == {
+        "duration_hours": "Must be between 1 and 12."
+    }
+
+    assert c.get("/api/_t/missing").status_code == 404
+
+    r = c.get("/api/_t/crash")
+    assert r.status_code == 500
+    assert r.get_json()["error"]["code"] == "INTERNAL_ERROR"
+    assert "boom" not in r.get_data(as_text=True)  # Internal details must never be exposed.
 
 
-MYSQL_UP = _mysql_available()
-needs_mysql = pytest.mark.skipif(not MYSQL_UP, reason="MySQL not reachable (check backend/.env)")
+def test_unknown_api_route_is_json(client):
+    r = client.get("/api/does-not-exist")
+    assert r.status_code == 404
+    assert r.get_json()["error"]["code"] == "NOT_FOUND"
 
 
-def reset_test_db():
-    sys.path.insert(0, DATABASE_DIR)
-    reset_demo.reset_mysql(TEST_DB)
-    conn = pymysql.connect(host=TestConfig.MYSQL_HOST, port=TestConfig.MYSQL_PORT, user=TestConfig.MYSQL_USER,
-                           password=TestConfig.MYSQL_PASSWORD, database=TEST_DB, autocommit=True)
-    with conn.cursor() as cur:
-        cur.execute("UPDATE System_Config SET config_value = '0' WHERE config_key = 'BLOCK_BOOKING_WHEN_UNPAID'")
-    conn.close()
-    settings.invalidate()
-    ratelimit.reset()
-    users.reset_phantom_lockouts()
+def test_wrong_method_is_json(client):
+    r = client.post("/api/health")
+    assert r.status_code == 405
+    assert r.get_json()["error"]["code"] == "METHOD_NOT_ALLOWED"
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _build_test_db():
-    if MYSQL_UP:
-        reset_test_db()
+def test_json_types(app):
+    _add_test_routes(app)
+    data = app.test_client().get("/api/_t/types").get_json()["data"]
+    assert data == {
+        "at": "2026-11-20T03:00:00Z",
+        "fee": 40,
+        "rate": 12.5,
+        "name": "Parking Lot A"
+    }
 
 
-@pytest.fixture()
-def fresh_db():
-    """Rebuild the test database before tests that modify seed data."""
-    reset_test_db()
+def test_pagination_limits(app):
+    _add_test_routes(app)
+    c = app.test_client()
+
+    assert c.get("/api/_t/page?page=0&per_page=999").get_json()["data"]["per_page"] == 100
+    assert c.get("/api/_t/page?page=0").get_json()["data"]["page"] == 1
+    assert c.get("/api/_t/page?page=abc").status_code == 400
 
 
-@pytest.fixture()
-def app():
-    return create_app(TestConfig)
+def test_frontend_index_served(client):
+    import os
+    import pytest
+    from app import STATIC_DIR
+
+    if not os.path.exists(os.path.join(STATIC_DIR, "index.html")):
+        pytest.skip("Frontend files have not been copied into static/ yet.")
+
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "ParkWise" in r.get_data(as_text=True)
 
 
-@pytest.fixture()
-def client(app):
-    return app.test_client()
+@needs_mysql
+def test_health_public_is_minimal(client):
+    r = client.get("/api/health")
+    assert r.status_code == 200
+
+    data = r.get_json()["data"]
+    assert data["status"] == "ok" and data["server_time"].endswith("Z")
+    assert "mongo" not in data and "outbox" not in data  # Internal details are hidden from anonymous users.
 
 
-class ApiClient:
-    """Test client that handles login and CSRF headers."""
+@needs_mysql
+def test_health_reports_both_databases_to_admin(api):
+    c = api()
+    assert c.login("admin@parkwise.local").status_code == 200
 
-    def __init__(self, app):
-        self.c = app.test_client()
-        self.csrf = None
-
-    def login(self, email, password=PASSWORD):
-        r = self.c.post("/api/auth/login", json={"email": email, "password": password})
-        if r.status_code == 200:
-            self.csrf = r.get_json()["data"]["csrf_token"]
-        return r
-
-    def _h(self):
-        return {"X-CSRF-Token": self.csrf} if self.csrf else {}
-
-    def get(self, url, **kw):
-        return self.c.get(url, **kw)
-
-    def post(self, url, json=None, **kw):
-        return self.c.post(url, json=json if json is not None else {}, headers=self._h(), **kw)
-
-    def patch(self, url, json=None, **kw):
-        return self.c.patch(url, json=json or {}, headers=self._h(), **kw)
-
-    def delete(self, url, **kw):
-        return self.c.delete(url, headers=self._h(), **kw)
-
-
-@pytest.fixture()
-def api(app):
-    return lambda: ApiClient(app)
-
-
-def data(r):
-    body = r.get_json()
-    assert body is not None, r.get_data(as_text=True)
-    return body.get("data") if body.get("ok") else body.get("error")
-
-
-@pytest.fixture()
-def mongo(monkeypatch):
-    """Create a seeded in-memory MongoDB for tests.
-
-    All modules that use get_mongo receive the fake database.
-    The simulated outage switch remains available.
-    """
-    import mongomock
-
-    from db import mongo as mongo_mod
-
-    fake = mongomock.MongoClient().parkwise
-
-    def get_fake():
-        if mongo_mod.is_simulated_down():
-            raise mongo_mod.MongoUnavailable("MongoDB is down (simulated)")
-        return fake
-
-    for target in ("db.mongo.get_mongo", "services.mongo_read.get_mongo", "services.mongo_sync.get_mongo"):
-        monkeypatch.setattr(target, get_fake)
-    sys.path.insert(0, DATABASE_DIR)
-    import seed_mongo
-    seed_mongo.seed(fake, seed_mongo.mysql_conn())
-    yield fake
-    mongo_mod.set_simulated_down(False)
+    data = c.get("/api/health").get_json()["data"]
+    assert data["mysql"] == "ok"
+    assert data["mongo"] in ("ok", "down")  # MySQL alone is sufficient for the application to run.
+    assert data["server_time"].endswith("Z")
+    assert set(data["outbox"]) == {"pending", "failed"}

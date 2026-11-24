@@ -51,7 +51,7 @@
 
       <p class="auth-alt">Don't have an account? <a href="/register.html">Sign up</a></p>
 
-      <!-- Demo accounts -->
+      <!-- No email or password is in this file. -->
       <details class="demo-box" id="demo-box" hidden>
         <summary>Demo accounts</summary>
         <div class="demo-list" id="demo-list"></div>
@@ -69,6 +69,9 @@
   const form = $("#login-form");
   const pw = $("#password");
 
+  // Pages that need a login send
+  // people here with and going back there would bounce straight to this page again,
+  // so in that case (and right after sign-up) Back goes home.
   $("#back-btn").addEventListener("click", (e) => {
     e.preventDefault();
     let sameSite = false;
@@ -77,7 +80,7 @@
     else location.href = "/";
   });
 
-  // Already logged in go straight to the role's home page
+  // Already logged in -> go straight to the role's home page
   const current = await me().catch(() => null);
   if (current) location.replace(safeNext(getParam("next"), homeFor(current)));
 
@@ -106,7 +109,7 @@
         const b = document.createElement("button");
         b.type = "button";
         b.className = "btn btn-secondary btn-sm";
-        b.textContent = a.label;  
+        b.textContent = a.label;                 // textContent: never parsed as HTML
         b.onclick = () => { form.email.value = a.email; pw.value = demo.password; clearFormErrors(form); };
         list.append(b);
       }

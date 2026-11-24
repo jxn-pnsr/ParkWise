@@ -61,7 +61,7 @@
 
   const show = (v) => v === null || v === undefined ? "NULL" : typeof v === "string" && /\dT\d.*Z$/.test(v) ? fmtDateTime(v) : String(v);
 
-  /** Field-by-field table of one row before and after; changed fields are highlighted */
+  /** Field-by-field table of one row before and after; changed fields are highlighted. */
   function compare(title, before, after) {
     const keys = [...new Set([...Object.keys(before || {}), ...Object.keys(after || {})])];
     if (!keys.length) return html`<div><h4>${title}</h4><p class="muted small">No row (NULL) before and after.</p></div>`;
@@ -75,7 +75,7 @@
     try { d = await api.get("/admin/demo"); }
     catch (err) {
       if (err.code === "DEMO_MODE_OFF") {
-        // The server runs without DEMO_MODE every demo button would answer 404.
+        // The server runs without DEMO_MODE: every demo button would answer 404.
         document.querySelectorAll("main button").forEach((b) => (b.disabled = true));
         toast("The Transaction Demo is turned off on this server. Set DEMO_MODE=1 in backend/.env and restart.", "error", 12000);
         return;

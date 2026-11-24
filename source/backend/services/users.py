@@ -1,11 +1,5 @@
-"""Register, log in (with lockout), profile, password.
-
-Lockout (security rule 7): LOGIN_MAX_FAILED wrong passwords in a row lock the
-account for LOGIN_LOCK_MINUTES. Every login and failed login is logged
-through the outbox (user.login / user.login_failed / user.locked).
-"""
-import pymysql
 import threading
+import pymysql
 
 from core.errors import AppError, Conflict, Forbidden, Locked, NotFound, Unauthenticated, ValidationError
 from core.security import hash_password, verify_password
@@ -44,6 +38,8 @@ def _ip():
     from flask import has_request_context, request
     return request.remote_addr if has_request_context() else None
 
+
+# Emails with no account get the same lockout behaviour, kept in memory
 _phantom = {}
 _phantom_lock = threading.Lock()
 
@@ -71,7 +67,11 @@ def _phantom_locked(email, now):
 
 
 def authenticate(email, password):
-    """Return the user row, or raise. Failed attempts are saved even though we raise."""
+    """Return the user row, or raise. Failed attempts are saved even though we raise.
+
+    The password hash is checked BEFORE the row lock is taken, so a burst of logins
+    for one email never holds a MySQL lock during the slow hash (M2).
+    """
     now = now_utc()
     ip = _ip()
     u = fetch_one("SELECT user_id, password_hash, locked_until FROM Users WHERE email = %s", (email,))
@@ -80,7 +80,7 @@ def authenticate(email, password):
     if not u:
         until = _phantom_locked(email, now)
         if until is None:
-            verify_password(None, password)          # same work as a real wrong password
+            verify_password(None, password)  # same work as a real wrong password
             until = _phantom_failed(email, now)
             outcome, payload = ("locked", until) if until else ("bad", None)
         else:
@@ -141,7 +141,6 @@ def authenticate(email, password):
 
 
 def reset_phantom_lockouts():
-    """Tests."""
     with _phantom_lock:
         _phantom.clear()
 
@@ -171,6 +170,8 @@ def update_profile(user_id, full_name=None, phone=None, clear_phone=False):
 
 
 def change_password(user_id, current_password, new_password):
+    """Returns the new hash (the route re-stamps the caller's session with it; every other
+    session of this user is logged out because its fingerprint no longer matches)."""
     row = fetch_one("SELECT password_hash FROM Users WHERE user_id = %s", (user_id,))
     if not row or not verify_password(row["password_hash"], current_password):   # slow hash, no lock held
         raise ValidationError(fields={"current_password": "Your current password is incorrect."})

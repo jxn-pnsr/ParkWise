@@ -83,7 +83,7 @@
   }
   $("#add-lot").onclick = () => editLot(null);
 
-  // bays of the chosen lot
+  // ---- bays of the chosen lot ----------------------------------------------------------
   const CLS = { Available: "tone-ok", Occupied: "tone-info", Reserved: "tone-bad", Held: "tone-warn", Maintenance: "tone-mute" };
   const bays = dataTable($("#bays"), {
     columns: [

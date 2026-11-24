@@ -63,8 +63,8 @@
   const form = $("#register-form");
   const pw = $("#password");
 
-  // Back: the previous ParkWise page, otherwise the home page. Pages that need a login send
-  // people here and going back there would bounce straight to this page again,
+  // the previous ParkWise page, otherwise the home page. Pages that need a login send
+  // people here with and going back there would bounce straight to this page again,
   // so in that case (and right after sign-up) Back goes home.
   $("#back-btn").addEventListener("click", (e) => {
     e.preventDefault();
@@ -100,8 +100,8 @@
     const btn = form.querySelector("[type=submit]");
     setBusy(btn, true);
     try {
-      // role is never sent the backend always creates a Customer (security rule 1).
-      // Phone is optional in the API and not asked for here.
+      // the backend always creates a Customer (security rule 1)
+      // Phone is optional in the API and not asked for here
       await register({ full_name: v.full_name, email: v.email, phone: null, password: v.password });
       location.href = "/login.html?registered=1&email=" + encodeURIComponent(v.email);
     } catch (err) {
