@@ -1,3 +1,6 @@
+-- this script DROPS every ParkWise table and builds them again (all data is lost)
+-- Use it for a new install or a demo reset only
+-- (it asks before dropping). Never run it against a database with real data.
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
 
@@ -54,6 +57,7 @@ CREATE TABLE System_Config (
 ) ENGINE=InnoDB;
 
 
+# Customer_Vehicles
 CREATE TABLE Customer_Vehicles (
   vehicle_id   INT UNSIGNED NOT NULL AUTO_INCREMENT,
   user_id      INT UNSIGNED NOT NULL,
@@ -63,6 +67,7 @@ CREATE TABLE Customer_Vehicles (
   is_deleted   TINYINT(1)   NOT NULL DEFAULT 0, 
   created_at   DATETIME     NOT NULL DEFAULT (UTC_TIMESTAMP()),
   updated_at   DATETIME     NULL,
+  -- unique per customer (not across customers), so nobody can block another person's plate
   active_plate_key  VARCHAR(100)
     GENERATED ALWAYS AS (IF(is_deleted = 0, CONCAT(user_id, '|', plate_number, '|', province), NULL)) VIRTUAL,
   default_owner_key INT UNSIGNED
@@ -98,7 +103,7 @@ CREATE TABLE Parking_Slots (
   slot_id     INT UNSIGNED NOT NULL AUTO_INCREMENT,
   lot_id      INT UNSIGNED NOT NULL,
   slot_code   VARCHAR(20)  NOT NULL,
-  slot_type   ENUM('Standard','EV') NOT NULL DEFAULT 'Standard',  -- EV = has a charger (phase 1)
+  slot_type   ENUM('Standard','EV') NOT NULL DEFAULT 'Standard',  -- EV = has a charger
   slot_status ENUM('Active','Maintenance') NOT NULL DEFAULT 'Active',
   is_deleted  TINYINT(1)   NOT NULL DEFAULT 0,
   created_at  DATETIME     NOT NULL DEFAULT (UTC_TIMESTAMP()),
@@ -184,14 +189,14 @@ CREATE TABLE Payments (
   base_fee       DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   overstay_fee   DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   total_amount   DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-  method         ENUM('Cash','QR') NULL,                   -- NULL while Pending
+  method         ENUM('Cash','QR') NULL,                   
   status         ENUM('Pending','Paid','Failed') NOT NULL DEFAULT 'Pending',
   paid_at        DATETIME      NULL,
-  is_deleted     TINYINT(1)    NOT NULL DEFAULT 0,         -- soft delete
+  is_deleted     TINYINT(1)    NOT NULL DEFAULT 0, 
   created_at     DATETIME      NOT NULL DEFAULT (UTC_TIMESTAMP()),
   updated_at     DATETIME      NULL,
   PRIMARY KEY (payment_id),
-  UNIQUE KEY uq_payment_reservation (reservation_id),      -- one payment per reservation
+  UNIQUE KEY uq_payment_reservation (reservation_id),   
   KEY idx_payment_user (user_id, status),
   KEY idx_payment_status (status),
   -- makes sure payment.user_id is the same user who owns the reservation
@@ -205,12 +210,11 @@ CREATE TABLE Payments (
   CONSTRAINT chk_payment_paid   CHECK (status <> 'Paid' OR (paid_at IS NOT NULL AND method IS NOT NULL))
 ) ENGINE=InnoDB;
 
-
 CREATE TABLE Integration_Outbox (
-  event_id     CHAR(36)     NOT NULL,                      -- UUID made by the backend
-  seq          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,    -- keeps events in order
-  event_type   VARCHAR(60)  NOT NULL,                      -- e.g. reservation.confirmed
-  aggregate_id VARCHAR(40)  NULL,                          -- e.g. the reservation_id
+  event_id     CHAR(36)     NOT NULL,                     
+  seq          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,    
+  event_type   VARCHAR(60)  NOT NULL,                 
+  aggregate_id VARCHAR(40)  NULL,                        
   payload      JSON         NOT NULL,
   status       ENUM('Pending','Sent','Failed') NOT NULL DEFAULT 'Pending',
   retry_count  TINYINT UNSIGNED NOT NULL DEFAULT 0,
@@ -245,7 +249,6 @@ INSERT INTO System_Config (config_key, config_value, description) VALUES
  ('LOGIN_MAX_FAILED',                 '5',  'Failed logins before the account is locked'),
  ('LOGIN_LOCK_MINUTES',               '5',  'Minutes the account stays locked'),
  ('BLOCK_BOOKING_WHEN_UNPAID',        '1',  '1 = a customer with an unpaid payment cannot make a new booking, 0 = allowed');
-
 
 -- Views
 -- reservation + user + vehicle + slot + lot + payment (good for the JOIN screenshot)
@@ -297,33 +300,3 @@ SELECT l.lot_id, l.lot_name, l.is_active,
 FROM Parking_Lots l
 LEFT JOIN v_slot_current_status c ON c.lot_id = l.lot_id
 GROUP BY l.lot_id, l.lot_name, l.is_active;
-
--- Reference queries for the backend (not executed here, use parameters)
--- (A) free slots in a lot for the range [:start, :end)
---   SELECT s.slot_id, s.slot_code
---   FROM Parking_Slots s
---   WHERE s.lot_id = :lot_id AND s.is_deleted = 0 AND s.slot_status = 'Active'
---     AND NOT EXISTS (
---       SELECT 1 FROM Reservations r
---       WHERE r.slot_id = s.slot_id AND r.start_time < :end
---         AND ( (r.status = 'Confirmed' AND r.end_time > :start)
---            OR (r.status = 'Held' AND r.end_time > :start AND r.hold_expires_at > :now)
---            OR (r.status = 'In Use' AND GREATEST(r.end_time, :now) > :start) ));
---
--- (B) same vehicle already booked in that range?
---   SELECT 1 FROM Reservations
---   WHERE vehicle_id = :vehicle_id AND start_time < :end AND end_time > :start
---     AND (status IN ('Confirmed','In Use') OR (status = 'Held' AND hold_expires_at > :now))
---   LIMIT 1;
---
--- (C) active reservations of a customer (for the max-3 rule)
---   SELECT COUNT(*) FROM Reservations
---   WHERE user_id = :user_id
---     AND (status IN ('Confirmed','In Use') OR (status = 'Held' AND hold_expires_at > :now));
---
--- (D) scheduler (each in a transaction, write an outbox row per changed reservation)
---   Held -> Expired:      status = 'Held' AND hold_expires_at <= :now
---   Confirmed -> No-show: status = 'Confirmed' AND start_time + INTERVAL :grace MINUTE <= :now
---   ending soon:          status = 'In Use' AND end_warning_sent = 0
---                         AND end_time <= :now + INTERVAL :warn MINUTE
---   overstay:             status = 'In Use' AND overstay_notified = 0 AND end_time <= :now

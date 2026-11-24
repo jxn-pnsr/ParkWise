@@ -8,4 +8,4 @@ ALTER TABLE Customer_Vehicles
 
 -- M4: customers with unpaid parking cannot book again (admin can switch it off).
 INSERT IGNORE INTO System_Config (config_key, config_value, description) VALUES
- ('BLOCK_BOOKING_WHEN_UNPAID', 
+ ('BLOCK_BOOKING_WHEN_UNPAID', '1', '1 = a customer with an unpaid payment cannot make a new booking, 0 = allowed');
