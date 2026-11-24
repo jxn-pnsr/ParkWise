@@ -624,3 +624,14 @@ The test fixture defaults to a MySQL database named `parkwise_test` and rebuilds
 ## License
 
 See the [`LICENSE`](LICENSE) file for license terms.
+
+## Team Members
+
+| Name                  | Student ID |
+| --------------------- | ---------- |
+| Krittin Kongsiang     | 6510545276 |
+| Kantapon Hemmadhun    | 6510545241 |
+| Jirat Kiattrairong    | 6810545506 |
+| Napakhet Namsrioun    | 6810545727 |
+| Panyasiri Aimngern    | 6810545743 |
+| Panisara Niyathirakul | 6810545751 |
