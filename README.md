@@ -629,8 +629,8 @@ See the [`LICENSE`](LICENSE) file for license terms.
 
 | Name                  | Student ID |
 | --------------------- | ---------- |
-| Krittin Kongsiang     | 6510545276 |
-| Kantapon Hemmadhun    | 6510545241 |
+| Krittin Kongsiang     | 6510545241 |
+| Kantapon Hemmadhun    | 6510545276 |
 | Jirat Kiattrairong    | 6810545506 |
 | Napakhet Namsrioun    | 6810545727 |
 | Panyasiri Aimngern    | 6810545743 |
